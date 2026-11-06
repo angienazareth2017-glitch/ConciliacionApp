@@ -31,7 +31,6 @@ with col_up2:
 # --- PROCESAMIENTO Y CONCILIACIÓN ---
 if archivo_banco and archivo_libro:
     try:
-        # Lectura de archivos
         df_banco = pd.read_excel(archivo_banco, sheet_name=0, header=5)
         df_libro = pd.read_excel(archivo_libro, sheet_name=0, header=0)
         
@@ -44,23 +43,20 @@ if archivo_banco and archivo_libro:
         st.success("¡Archivos cargados y leídos correctamente!")
 
         if st.button("🚀 Ejecutar Conciliación Masiva"):
-            with st.spinner("Procesando cruce masivo de partidas..."):
+            with st.spinner("Procesando cruce masivo de partidas y análisis estructural..."):
                 banco = df_banco.copy()
                 libro = df_libro.copy()
                 
-                # Función para limpiar montos venezolanos y normalizar escala SAP (/10)
                 def limpiar_monto_ve_libro(val):
                     if pd.isna(val):
                         return 0.0
                     s = str(val).replace('BsS', '').replace('Bs.', '').strip()
                     s = s.replace('.', '').replace(',', '.')
                     try:
-                        # Se divide entre 10 para nivelar la escala de SAP con el Banco
-                        return float(s) / 10.0
+                        return float(s) / 10.0  # Nivelar escala SAP con Banco
                     except:
                         return 0.0
 
-                # Normalizar Banco
                 col_monto_b = next((c for c in banco.columns if 'monto' in c.lower()), 'Monto')
                 col_fecha_b = next((c for c in banco.columns if 'fecha' in c.lower()), 'Fecha')
                 col_desc_b = next((c for c in banco.columns if 'descripción' in c.lower()), 'Descripción')
@@ -73,7 +69,6 @@ if archivo_banco and archivo_libro:
                 banco['Estatus'] = 'Pendiente Banco'
                 banco['Libro_Match_Idx'] = None
 
-                # Normalizar Libro Mayor
                 col_fecha_l = next((c for c in libro.columns if 'fecha' in c.lower() and 'contabilización' in c.lower()), libro.columns[0])
                 col_comm_l = next((c for c in libro.columns if 'comentario' in c.lower()), libro.columns[6])
                 col_cargo_l = next((c for c in libro.columns if 'cargo' in c.lower()), 'Cargo (ML)')
@@ -82,12 +77,12 @@ if archivo_banco and archivo_libro:
                 libro['Cargo_Num'] = libro[col_cargo_l].apply(limpiar_monto_ve_libro)
                 libro['Abono_Num'] = libro[col_abono_l].apply(limpiar_monto_ve_libro)
                 
-                # Neto contable normalizado
-                libro['Monto_Neto'] = libro['Abono_Num'] - libro['Cargo_Num']
+                # Magnitud absoluta robusta para SAP sin importar inversión de columnas
+                libro['Monto_Abs'] = libro[['Cargo_Num', 'Abono_Num']].max(axis=1)
                 libro['Fecha_Dt'] = pd.to_datetime(libro[col_fecha_l], errors='coerce')
                 libro['Estatus'] = 'Pendiente Libros'
 
-                # 1. Marcar Saldo Inicial y Anulados
+                # 1. Saldo Inicial y Anulados
                 for idx_b, row_b in banco.iterrows():
                     if 'SALDO INICIAL' in str(row_b[col_desc_b]).upper():
                         banco.loc[idx_b, 'Estatus'] = 'Saldo Inicial (Banco)'
@@ -105,13 +100,13 @@ if archivo_banco and archivo_libro:
                     if (carg == 0 and abon == 0) or ('ANUL' in comm) or (carg > 0 and abon > 0 and carg == abon):
                         libro.loc[idx_l, 'Estatus'] = 'Anulado / Reversado'
 
-                # 2. MOTOR DE CRUCE MASIVO OPTIMIZADO
+                # 2. MOTOR DE CRUCE MASIVO (Por Magnitud Absoluta y Tolerancia de 3 Días)
                 libro_usados = set()
                 for idx_b, row_b in banco.iterrows():
                     if banco.loc[idx_b, 'Estatus'] != 'Pendiente Banco':
                         continue
                     
-                    m_b = row_b['Monto_Clean']
+                    m_b = abs(row_b['Monto_Clean'])
                     f_b = row_b['Fecha_Dt']
                     if pd.isna(f_b) or m_b == 0:
                         continue
@@ -124,22 +119,34 @@ if archivo_banco and archivo_libro:
                         if pd.isna(f_l):
                             continue
 
-                        # Validar tolerancia de fechas (hasta 3 días)
                         if abs((f_l - f_b).days) > tolerancia_dias:
                             continue
 
-                        m_l = row_l['Monto_Neto']
+                        m_l = row_l['Monto_Abs']
 
-                        # Cruce por monto exacto o por valor absoluto magnitud
-                        if abs(m_b - m_l) <= tolerancia_monto or abs(abs(m_b) - abs(m_l)) <= tolerancia_monto:
+                        if abs(m_b - m_l) <= tolerancia_monto:
                             banco.loc[idx_b, 'Estatus'] = 'Conciliado'
                             banco.loc[idx_b, 'Libro_Match_Idx'] = idx_l
                             libro.loc[idx_l, 'Estatus'] = 'Conciliado'
                             libro_usados.add(idx_l)
                             break
 
-                # Métricas y Porcentajes
-                total_b = len(banco[~banco['Estatus'].str.contains('Saldo Inicial')])
+                # 3. ANÁLISIS Y CLASIFICACIÓN DE MOVIMIENTOS DEL BANCO
+                banco_validos = banco[~banco['Estatus'].str.contains('Saldo Inicial')]
+                mask_comision = banco_validos[col_desc_b].str.contains('COMISIO|TARIFA|MANTENIMIENTO', case=False, na=False)
+                
+                comisiones = banco_validos[mask_comision]
+                creditos_sin_comision = banco_validos[(banco_validos['Monto_Clean'] > 0) & (~mask_comision)]
+                debitos_sin_comision = banco_validos[(banco_validos['Monto_Clean'] < 0) & (~mask_comision)]
+
+                st.subheader("🏦 Análisis de Movimientos del Banco (Clasificación)")
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Débitos (Sin Comisiones)", len(debitos_sin_comision))
+                c2.metric("Créditos (Sin Comisiones)", len(creditos_sin_comision))
+                c3.metric("Comisiones y Tarifas", len(comisiones))
+
+                # Métricas Globales
+                total_b = len(banco_validos)
                 conciliados_b = len(banco[banco['Estatus'] == 'Conciliado'])
                 porcentaje = (conciliados_b / total_b * 100) if total_b > 0 else 0
                 anulados_l = len(libro[libro['Estatus'] == 'Anulado / Reversado'])
@@ -152,7 +159,7 @@ if archivo_banco and archivo_libro:
                 m4.metric("% Conciliado", f"{porcentaje:.1f}%")
                 m5.metric("Anulados / Reversados", anulados_l)
 
-                # 3. CONSOLIDADO (Predomina el Banco)
+                # 4. CONSOLIDADO
                 consolidado_rows = []
                 for idx_b, row_b in banco.iterrows():
                     fila_cons = {
@@ -190,7 +197,6 @@ if archivo_banco and archivo_libro:
                 st.subheader("📊 Vista Previa: Consolidado (Predomina el Banco)")
                 st.dataframe(df_consolidado.head(10))
 
-                # Exportar a Excel con 3 Hojas
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
                     df_consolidado.to_excel(writer, sheet_name='Banco_vs_Libro_Consolidado', index=False)
