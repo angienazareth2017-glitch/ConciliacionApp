@@ -48,14 +48,15 @@ if archivo_banco and archivo_libro:
                 banco = df_banco.copy()
                 libro = df_libro.copy()
                 
-                # Función para limpiar montos venezolanos (ej: "BsS 2.500.000,00" -> 2500000.00)
-                def limpiar_monto_ve(val):
+                # Función para limpiar montos venezolanos y normalizar escala SAP (/10)
+                def limpiar_monto_ve_libro(val):
                     if pd.isna(val):
                         return 0.0
                     s = str(val).replace('BsS', '').replace('Bs.', '').strip()
                     s = s.replace('.', '').replace(',', '.')
                     try:
-                        return float(s)
+                        # Se divide entre 10 para nivelar la escala de SAP con el Banco
+                        return float(s) / 10.0
                     except:
                         return 0.0
 
@@ -78,10 +79,10 @@ if archivo_banco and archivo_libro:
                 col_cargo_l = next((c for c in libro.columns if 'cargo' in c.lower()), 'Cargo (ML)')
                 col_abono_l = next((c for c in libro.columns if 'abono' in c.lower()), 'Abono (ML)')
 
-                libro['Cargo_Num'] = libro[col_cargo_l].apply(limpiar_monto_ve)
-                libro['Abono_Num'] = libro[col_abono_l].apply(limpiar_monto_ve)
+                libro['Cargo_Num'] = libro[col_cargo_l].apply(limpiar_monto_ve_libro)
+                libro['Abono_Num'] = libro[col_abono_l].apply(limpiar_monto_ve_libro)
                 
-                # Neto contable: Abono (ingreso +) - Cargo (egreso -)
+                # Neto contable normalizado
                 libro['Monto_Neto'] = libro['Abono_Num'] - libro['Cargo_Num']
                 libro['Fecha_Dt'] = pd.to_datetime(libro[col_fecha_l], errors='coerce')
                 libro['Estatus'] = 'Pendiente Libros'
