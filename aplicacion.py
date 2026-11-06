@@ -102,7 +102,7 @@ if archivo_banco and archivo_libro:
                     if (carg == 0 and abon == 0) or ('ANUL' in comm) or (carg > 0 and abon > 0 and carg == abon):
                         libro.loc[idx_l, 'Estatus'] = 'Anulado / Reversado'
 
-                # 2. MOTOR DE CRUCE MASIVO (Optimizado)
+                # 2. MOTOR DE CRUCE MASIVO OPTIMIZADO
                 libro_usados = set()
                 for idx_b, row_b in banco.iterrows():
                     if banco.loc[idx_b, 'Estatus'] != 'Pendiente Banco':
@@ -127,7 +127,7 @@ if archivo_banco and archivo_libro:
 
                         m_l = row_l['Monto_Neto']
 
-                        # Cruce exacto o por valor absoluto magnitud
+                        # Cruce por monto exacto o por valor absoluto magnitud
                         if abs(m_b - m_l) <= tolerancia_monto or abs(abs(m_b) - abs(m_l)) <= tolerancia_monto:
                             banco.loc[idx_b, 'Estatus'] = 'Conciliado'
                             banco.loc[idx_b, 'Libro_Match_Idx'] = idx_l
