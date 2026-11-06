@@ -15,7 +15,7 @@ if password_ingresada != CONTRASENA_CORRECTA:
 
 # --- INTERFAZ PRINCIPAL ---
 st.title("🏦 Agente de Conciliación Bancaria Inteligente")
-st.write("Laboratorios Quimio-Vet, C.A. - Motor de Conciliación Optimizado")
+st.write("Laboratorios Quimio-Vet, C.A. - Conciliación Automatizada y Consolidación")
 
 # --- BARRA LATERAL: Configuración ---
 st.sidebar.header("⚙️ Configuración del Motor")
@@ -45,7 +45,7 @@ if archivo_banco and archivo_libro:
         st.success("¡Archivos cargados y leídos correctamente!")
 
         if st.button("🚀 Ejecutar Conciliación Masiva"):
-            with st.spinner("Procesando cruce masivo por montos y tolerancia de fechas..."):
+            with st.spinner("Procesando cruce masivo de partidas..."):
                 banco = df_banco.copy()
                 libro = df_libro.copy()
                 
@@ -79,45 +79,42 @@ if archivo_banco and archivo_libro:
                 libro['Cargo_Num'] = libro[col_cargo_l].apply(limpiar_monto_ve)
                 libro['Abono_Num'] = libro[col_abono_l].apply(limpiar_monto_ve)
                 
-                # Valor absoluto y neto para SAP
-                libro['Monto_Abs'] = libro[['Cargo_Num', 'Abono_Num']].max(axis=1)
+                # Neto contable: Abono (ingreso +) - Cargo (egreso -)
+                libro['Monto_Neto'] = libro['Abono_Num'] - libro['Cargo_Num']
                 libro['Fecha_Dt'] = pd.to_datetime(libro[col_fecha_l], errors='coerce')
                 libro['Estatus'] = 'Pendiente Libros'
 
-                # 1. VERIFICACIÓN Y MARCA DE SALDO INICIAL
+                # 1. Marcar Saldo Inicial y Anulados
                 for idx_b, row_b in banco.iterrows():
-                    desc_b = str(row_b[col_desc_b]).upper()
-                    if 'SALDO INICIAL' in desc_b:
+                    if 'SALDO INICIAL' in str(row_b[col_desc_b]).upper():
                         banco.loc[idx_b, 'Estatus'] = 'Saldo Inicial (Banco)'
                         break
 
                 if len(libro) > 0:
                     libro.loc[0, 'Estatus'] = 'Saldo Inicial (Libros)'
 
-                # 2. DETECCIÓN DE ANULADOS / REVERSADOS
                 for idx_l, row_l in libro.iterrows():
                     if libro.loc[idx_l, 'Estatus'] == 'Saldo Inicial (Libros)':
                         continue
                     carg = row_l['Cargo_Num']
                     abon = row_l['Abono_Num']
                     comm = str(row_l[col_comm_l]).upper()
-                    if (carg == 0 and abon == 0) or ('ANUL' in comm):
-                        libro.loc[idx_l, 'Estatus'] = 'Anulado / Reversado'
-                    elif carg > 0 and abon > 0 and carg == abon:
+                    if (carg == 0 and abon == 0) or ('ANUL' in comm) or (carg > 0 and abon > 0 and carg == abon):
                         libro.loc[idx_l, 'Estatus'] = 'Anulado / Reversado'
 
-                # 3. MOTOR DE CRUCE MASIVO (Por monto absoluto y tolerancia de 3 días)
+                # 2. MOTOR DE CRUCE MASIVO (Optimizado)
+                libro_usados = set()
                 for idx_b, row_b in banco.iterrows():
                     if banco.loc[idx_b, 'Estatus'] != 'Pendiente Banco':
                         continue
                     
-                    m_b = abs(row_b['Monto_Clean'])
+                    m_b = row_b['Monto_Clean']
                     f_b = row_b['Fecha_Dt']
                     if pd.isna(f_b) or m_b == 0:
                         continue
 
                     for idx_l, row_l in libro.iterrows():
-                        if libro.loc[idx_l, 'Estatus'] != 'Pendiente Libros':
+                        if idx_l in libro_usados or libro.loc[idx_l, 'Estatus'] not in ['Pendiente Libros']:
                             continue
                         
                         f_l = row_l['Fecha_Dt']
@@ -128,13 +125,14 @@ if archivo_banco and archivo_libro:
                         if abs((f_l - f_b).days) > tolerancia_dias:
                             continue
 
-                        m_l = row_l['Monto_Abs']
+                        m_l = row_l['Monto_Neto']
 
-                        # Cruce por coincidencia de monto absoluto
-                        if abs(m_b - m_l) <= tolerancia_monto:
+                        # Cruce exacto o por valor absoluto magnitud
+                        if abs(m_b - m_l) <= tolerancia_monto or abs(abs(m_b) - abs(m_l)) <= tolerancia_monto:
                             banco.loc[idx_b, 'Estatus'] = 'Conciliado'
                             banco.loc[idx_b, 'Libro_Match_Idx'] = idx_l
                             libro.loc[idx_l, 'Estatus'] = 'Conciliado'
+                            libro_usados.add(idx_l)
                             break
 
                 # Métricas y Porcentajes
@@ -151,7 +149,7 @@ if archivo_banco and archivo_libro:
                 m4.metric("% Conciliado", f"{porcentaje:.1f}%")
                 m5.metric("Anulados / Reversados", anulados_l)
 
-                # 4. CONSTRUCCIÓN DE HOJA CONSOLIDADA (Predomina el Banco)
+                # 3. CONSOLIDADO (Predomina el Banco)
                 consolidado_rows = []
                 for idx_b, row_b in banco.iterrows():
                     fila_cons = {
@@ -200,7 +198,7 @@ if archivo_banco and archivo_libro:
                 st.download_button(
                     label="📥 Descargar Reporte Completo en Excel (3 Hojas)",
                     data=excel_data,
-                    file_name="Reporte_Conciliacion_QuimioVet_Optimizado.xlsx",
+                    file_name="Reporte_Conciliacion_QuimioVet_Final.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
 
