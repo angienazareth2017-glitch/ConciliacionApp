@@ -66,7 +66,8 @@ if archivo_banco and archivo_libro:
                 col_desc_b = next((c for c in banco.columns if 'descripción' in c.lower()), 'Descripción')
 
                 banco['Monto_Clean'] = pd.to_numeric(banco[col_monto_b], errors='coerce').fillna(0)
-                banco['Fecha_Dt'] = pd.to_datetime(banco[col_fecha_b], format='%d/%m/%Y', errors='coerce')
+                # Corrección de fecha: lectura robusta automática sin forzar formato estricto
+                banco['Fecha_Dt'] = pd.to_datetime(banco[col_fecha_b], errors='coerce')
                 banco['Estatus'] = 'Pendiente Banco'
                 banco['Libro_Match_Idx'] = None
 
