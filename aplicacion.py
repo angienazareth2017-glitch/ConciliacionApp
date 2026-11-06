@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from rapidfuzz import fuzz
+from datetime import datetime
 import io
 
 st.set_page_config(page_title="Agente de Conciliación Bancaria - Quimio-Vet", layout="wide")
@@ -15,12 +15,11 @@ if password_ingresada != CONTRASENA_CORRECTA:
 
 # --- INTERFAZ PRINCIPAL ---
 st.title("🏦 Agente de Conciliación Bancaria Inteligente")
-st.write("Laboratorios Quimio-Vet, C.A. - Conciliación Automatizada y Análisis de Anulaciones")
+st.write("Laboratorios Quimio-Vet, C.A. - Conciliación Automatizada, Validación de Saldos y Consolidación")
 
 # --- BARRA LATERAL: Configuración ---
 st.sidebar.header("⚙️ Configuración del Motor")
 tolerancia_dias = st.sidebar.slider("Tolerancia de fechas (días)", 0, 7, 3)
-umbral_similitud = st.sidebar.slider("Umbral de similitud de texto (%)", 50, 100, 80)
 tolerancia_monto = st.sidebar.number_input("Tolerancia en monto", min_value=0.0, value=0.0, step=0.01)
 
 # --- CARGA DE ARCHIVOS ---
@@ -43,19 +42,18 @@ if archivo_banco and archivo_libro:
         df_banco.columns = [str(c).strip() for c in df_banco.columns]
         df_libro.columns = [str(c).strip() for c in df_libro.columns]
 
-        st.success("¡Archivos cargados y estructurados correctamente!")
+        st.success("¡Archivos cargados y leídos correctamente!")
 
-        if st.button("🚀 Ejecutar Conciliación y Análisis de Anulados"):
-            with st.spinner("Procesando montos venezolanos, cruce y análisis de asientos..."):
+        if st.button("🚀 Ejecutar Conciliación y Consolidación"):
+            with st.spinner("Procesando saldos iniciales, cruce de partidas y consolidación..."):
                 banco = df_banco.copy()
                 libro = df_libro.copy()
                 
-                # Función para limpiar formato de moneda venezolano (ej: "BsS 2.500.000,00" -> 2500000.00)
+                # Función para limpiar montos venezolanos (ej: "BsS 2.500.000,00" -> 2500000.00)
                 def limpiar_monto_ve(val):
                     if pd.isna(val):
                         return 0.0
                     s = str(val).replace('BsS', '').replace('Bs.', '').strip()
-                    # Quitar puntos de miles y cambiar coma decimal por punto
                     s = s.replace('.', '').replace(',', '.')
                     try:
                         return float(s)
@@ -64,77 +62,96 @@ if archivo_banco and archivo_libro:
 
                 # Normalizar Banco
                 col_monto_b = next((c for c in banco.columns if 'monto' in c.lower()), 'Monto')
-                col_ref_b = next((c for c in banco.columns if 'referencia' in c.lower()), 'Referencia')
+                col_fecha_b = next((c for c in banco.columns if 'fecha' in c.lower()), 'Fecha')
                 col_desc_b = next((c for c in banco.columns if 'descripción' in c.lower()), 'Descripción')
 
                 banco['Monto_Clean'] = pd.to_numeric(banco[col_monto_b], errors='coerce').fillna(0)
-                banco['Ref_Clean'] = banco[col_ref_b].astype(str).str.strip()
-                banco['Estatus'] = 'Por Conciliar (Banco)'
+                banco['Fecha_Dt'] = pd.to_datetime(banco[col_fecha_b], format='%d/%m/%Y', errors='coerce')
+                banco['Estatus'] = 'Pendiente Banco'
+                banco['Libro_Match_Idx'] = None
 
                 # Normalizar Libro Mayor
-                col_doc_l = next((c for c in libro.columns if 'documento' in c.lower()), libro.columns[3])
-                col_trans_l = next((c for c in libro.columns if 'transacción' in c.lower()), libro.columns[4])
+                col_fecha_l = next((c for c in libro.columns if 'fecha' in c.lower() and 'contabilización' in c.lower()), libro.columns[0])
                 col_comm_l = next((c for c in libro.columns if 'comentario' in c.lower()), libro.columns[6])
                 col_cargo_l = next((c for c in libro.columns if 'cargo' in c.lower()), 'Cargo (ML)')
                 col_abono_l = next((c for c in libro.columns if 'abono' in c.lower()), 'Abono (ML)')
 
                 libro['Cargo_Num'] = libro[col_cargo_l].apply(limpiar_monto_ve)
                 libro['Abono_Num'] = libro[col_abono_l].apply(limpiar_monto_ve)
-                
-                # En libro: Abono = Ingreso (+), Cargo = Egreso (-)
                 libro['Monto_Neto'] = libro['Abono_Num'] - libro['Cargo_Num']
-                libro['Doc_Clean'] = libro[col_doc_l].astype(str).str.strip()
-                libro['Trans_Clean'] = pd.to_numeric(libro[col_trans_l], errors='coerce').fillna(0).astype(int).astype(str)
-                libro['Estatus'] = 'Por Conciliar (Libros)'
+                libro['Fecha_Dt'] = pd.to_datetime(libro[col_fecha_l], errors='coerce')
+                libro['Estatus'] = 'Pendiente Libros'
 
-                # 1. ANÁLISIS DE ASIENTOS ANULADOS / REVERSADOS INTERNOS
-                # Detectar si en el libro hay pares de cargos y abonos con el mismo monto exacto y referencia que se anulan
-                for idx, row in libro.iterrows():
-                    monto = row['Monto_Neto']
-                    if monto == 0:
-                        libro.loc[idx, 'Estatus'] = 'Anulado / Cero'
-                    else:
-                        # Buscar contrapartida opuesta en el mismo libro
-                        opuesto = libro[(libro.index != idx) & (libro['Monto_Neto'] == -monto) & (libro['Estatus'] == 'Por Conciliar (Libros)')]
-                        if len(opuesto) > 0:
-                            libro.loc[idx, 'Estatus'] = 'Asiento Reversado / Anulado'
-                            libro.loc[opuesto.index[0], 'Estatus'] = 'Asiento Reversado / Anulado'
-
-                # 2. MOTOR DE CRUCE INTELIGENTE BANCO VS LIBROS
+                # 1. VERIFICACIÓN Y MARCA DE SALDO INICIAL
                 for idx_b, row_b in banco.iterrows():
-                    m_b = row_b['Monto_Clean']
-                    ref_b = row_b['Ref_Clean']
-                    desc_b = str(row_b[col_desc_b])
+                    desc_b = str(row_b[col_desc_b]).upper()
+                    if 'SALDO INICIAL' in desc_b:
+                        banco.loc[idx_b, 'Estatus'] = 'Saldo Inicial (Banco)'
+                        break
 
-                    if 'SALDO INICIAL' in desc_b.upper():
-                        banco.loc[idx_b, 'Estatus'] = 'Saldo Inicial'
+                # Saldo inicial en libro (primer registro o saldo inicial)
+                if len(libro) > 0:
+                    libro.loc[0, 'Estatus'] = 'Saldo Inicial (Libros)'
+
+                # 2. DETECCIÓN DE ANULADOS / REVERSADOS EN LIBRO
+                for idx_l, row_l in libro.iterrows():
+                    if libro.loc[idx_l, 'Estatus'] == 'Saldo Inicial (Libros)':
+                        continue
+                    carg = row_l['Cargo_Num']
+                    abon = row_l['Abono_Num']
+                    comm = str(row_l[col_comm_l]).upper()
+                    if (carg == 0 and abon == 0) or ('ANUL' in comm):
+                        libro.loc[idx_l, 'Estatus'] = 'Anulado / Reversado'
+                    elif carg > 0 and abon > 0 and carg == abon:
+                        libro.loc[idx_l, 'Estatus'] = 'Anulado / Reversado'
+
+                # 3. MOTOR DE CRUCE INTELIGENTE (Banco manda, tolerancia 3 días y montos reales)
+                for idx_b, row_b in banco.iterrows():
+                    if banco.loc[idx_b, 'Estatus'] != 'Pendiente Banco':
+                        continue
+                    
+                    m_b = row_b['Monto_Clean']
+                    f_b = row_b['Fecha_Dt']
+                    if pd.isna(f_b):
                         continue
 
+                    es_ingreso_banco = m_b > 0
+
                     for idx_l, row_l in libro.iterrows():
-                        if libro.loc[idx_l, 'Estatus'] in ['Conciliado', 'Asiento Reversado / Anulado', 'Anulado / Cero']:
+                        if libro.loc[idx_l, 'Estatus'] not in ['Pendiente Libros']:
                             continue
-                        m_l = row_l['Monto_Neto']
-                        doc_l = row_l['Doc_Clean']
-                        trans_l = row_l['Trans_Clean']
-                        desc_l = str(row_l[col_comm_l])
-
-                        # Coincidencia por monto y referencia o similitud de texto
-                        monto_coincide = (abs(m_b - m_l) <= tolerancia_monto) or (abs(abs(m_b) - abs(m_l)) <= tolerancia_monto)
-                        ref_coincide = (ref_b != '' and (ref_b == doc_l or ref_b == trans_l))
                         
-                        similitud = fuzz.ratio(desc_b.lower(), desc_l.lower())
+                        f_l = row_l['Fecha_Dt']
+                        if pd.isna(f_l):
+                            continue
 
-                        if monto_coincide and (ref_coincide or similitud >= umbral_similitud or m_b == m_l):
+                        # Validar tolerancia de fechas (hasta 3 días)
+                        if abs((f_l - f_b).days) > tolerancia_dias:
+                            continue
+
+                        carg_l = row_l['Cargo_Num']
+                        abon_l = row_l['Abono_Num']
+
+                        # Validar sentido real
+                        match_encontrado = False
+                        if es_ingreso_banco:
+                            if abon_l > 0 and abs(m_b - abon_l) <= tolerancia_monto:
+                                match_encontrado = True
+                        else:
+                            if carg_l > 0 and abs(abs(m_b) - carg_l) <= tolerancia_monto:
+                                match_encontrado = True
+
+                        if match_encontrado:
                             banco.loc[idx_b, 'Estatus'] = 'Conciliado'
+                            banco.loc[idx_b, 'Libro_Match_Idx'] = idx_l
                             libro.loc[idx_l, 'Estatus'] = 'Conciliado'
                             break
 
                 # Métricas y Porcentajes
-                total_b = len(banco[banco['Estatus'] != 'Saldo Inicial'])
+                total_b = len(banco[~banco['Estatus'].str.contains('Saldo Inicial')])
                 conciliados_b = len(banco[banco['Estatus'] == 'Conciliado'])
                 porcentaje = (conciliados_b / total_b * 100) if total_b > 0 else 0
-
-                anulados_l = len(libro[libro['Estatus'] == 'Asiento Reversado / Anulado'])
+                anulados_l = len(libro[libro['Estatus'] == 'Anulado / Reversado'])
 
                 st.subheader("📈 Resumen y Porcentaje de Conciliación")
                 m1, m2, m3, m4, m5 = st.columns(5)
@@ -142,29 +159,68 @@ if archivo_banco and archivo_libro:
                 m2.metric("Conciliados", conciliados_b)
                 m3.metric("Pendientes Banco", total_b - conciliados_b)
                 m4.metric("% Conciliado", f"{porcentaje:.1f}%")
-                m5.metric("Asientos Anulados/Reversados", anulados_l)
+                m5.metric("Anulados / Reversados", anulados_l)
+
+                # 4. CONSTRUCCIÓN DE HOJA CONSOLIDADA (Predomina el Banco)
+                consolidado_rows = []
+                for idx_b, row_b in banco.iterrows():
+                    fila_cons = {
+                        'Banco_Fecha': row_b.get('Fecha'),
+                        'Banco_Referencia': row_b.get('Referencia'),
+                        'Banco_Descripcion': row_b.get('Descripción'),
+                        'Banco_Monto': row_b.get('Monto_Clean'),
+                        'Estatus_Conciliacion': row_b.get('Estatus')
+                    }
+                    
+                    match_idx = row_b.get('Libro_Match_Idx')
+                    if match_idx is not None and not pd.isna(match_idx):
+                        r_libro = libro.loc[int(match_idx)]
+                        fila_cons.update({
+                            'Libro_Fecha_Contabilizacion': r_libro.get('Fecha de contabilización'),
+                            'Libro_Nro_Documento': r_libro.get('Nº documento'),
+                            'Libro_Nro_Transaccion': r_libro.get('Nº de transacción'),
+                            'Libro_Comentarios': r_libro.get('Comentarios'),
+                            'Libro_Cargo_Egreso': r_libro.get('Cargo (ML)'),
+                            'Libro_Abono_Ingreso': r_libro.get('Abono (ML)')
+                        })
+                    else:
+                        fila_cons.update({
+                            'Libro_Fecha_Contabilizacion': '',
+                            'Libro_Nro_Documento': '',
+                            'Libro_Nro_Transaccion': '',
+                            'Libro_Comentarios': '',
+                            'Libro_Cargo_Egreso': '',
+                            'Libro_Abono_Ingreso': ''
+                        })
+                    consolidado_rows.append(fila_cons)
+
+                df_consolidado = pd.DataFrame(consolidado_rows)
+
+                st.subheader("📊 Vista Previa: Consolidado (Predomina el Banco)")
+                st.dataframe(df_consolidado.head(10))
 
                 st.subheader("📊 Detalle del Extracto Bancario")
                 st.dataframe(banco)
 
-                st.subheader("📊 Detalle del Mayor Contable (con Hallazgos de Anulados)")
+                st.subheader("📊 Detalle del Mayor Contable")
                 st.dataframe(libro)
 
-                # Exportar a Excel
+                # Exportar a Excel con 3 Hojas
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                    banco.to_excel(writer, sheet_name='Banco_Analizado', index=False)
-                    libro.to_excel(writer, sheet_name='Mayor_Analizado', index=False)
+                    df_consolidado.to_excel(writer, sheet_name='Banco_vs_Libro_Consolidado', index=False)
+                    banco.to_excel(writer, sheet_name='Extracto_Banco', index=False)
+                    libro.to_excel(writer, sheet_name='Mayor_Contable', index=False)
                 excel_data = output.getvalue()
 
                 st.download_button(
-                    label="📥 Descargar Reporte Completo en Excel",
+                    label="📥 Descargar Reporte Completo en Excel (3 Hojas)",
                     data=excel_data,
-                    file_name="Reporte_Conciliacion_QuimioVet_Avanzado.xlsx",
+                    file_name="Reporte_Conciliacion_QuimioVet_Consolidado.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
 
     except Exception as e:
         st.error(f"Error procesando los archivos: {e}")
 else:
-    st.info("Por favor, sube ambos archivos para activar el motor avanzado de conciliación y detección de anulados.")
+    st.info("Por favor, sube ambos archivos para activar el motor de conciliación.")
