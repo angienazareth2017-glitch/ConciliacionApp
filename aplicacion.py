@@ -43,17 +43,29 @@ if archivo_banco and archivo_libro:
         st.success("¡Archivos cargados y leídos correctamente!")
 
         if st.button("🚀 Ejecutar Conciliación Masiva"):
-            with st.spinner("Procesando cruce masivo de partidas y análisis estructural..."):
+            with st.spinner("Procesando cruce masivo de partidas y normalización..."):
                 banco = df_banco.copy()
                 libro = df_libro.copy()
                 
-                def limpiar_monto_ve_libro(val):
+                def limpiar_monto_flexible(val):
                     if pd.isna(val):
                         return 0.0
                     s = str(val).replace('BsS', '').replace('Bs.', '').strip()
-                    s = s.replace('.', '').replace(',', '.')
+                    # Si el formato usa comas para miles y puntos para decimales o viceversa
+                    if ',' in s and '.' in s:
+                        if s.rfind(',') > s.rfind('.'):
+                            s = s.replace('.', '').replace(',', '.')
+                        else:
+                            s = s.replace(',', '')
+                    elif ',' in s:
+                        s = s.replace(',', '.')
+                    
                     try:
-                        return float(s) / 10.0  # Nivelar escala SAP con Banco
+                        num = float(s)
+                        # Auto-escala si el número es proporcionalmente mayor por formato SAP
+                        if abs(num) > 100000000: 
+                            return num / 100.0
+                        return num
                     except:
                         return 0.0
 
@@ -74,10 +86,9 @@ if archivo_banco and archivo_libro:
                 col_cargo_l = next((c for c in libro.columns if 'cargo' in c.lower()), 'Cargo (ML)')
                 col_abono_l = next((c for c in libro.columns if 'abono' in c.lower()), 'Abono (ML)')
 
-                libro['Cargo_Num'] = libro[col_cargo_l].apply(limpiar_monto_ve_libro)
-                libro['Abono_Num'] = libro[col_abono_l].apply(limpiar_monto_ve_libro)
+                libro['Cargo_Num'] = libro[col_cargo_l].apply(limpiar_monto_flexible)
+                libro['Abono_Num'] = libro[col_abono_l].apply(limpiar_monto_flexible)
                 
-                # Magnitud absoluta robusta para SAP sin importar inversión de columnas
                 libro['Monto_Abs'] = libro[['Cargo_Num', 'Abono_Num']].max(axis=1)
                 libro['Fecha_Dt'] = pd.to_datetime(libro[col_fecha_l], errors='coerce')
                 libro['Estatus'] = 'Pendiente Libros'
@@ -100,7 +111,7 @@ if archivo_banco and archivo_libro:
                     if (carg == 0 and abon == 0) or ('ANUL' in comm) or (carg > 0 and abon > 0 and carg == abon):
                         libro.loc[idx_l, 'Estatus'] = 'Anulado / Reversado'
 
-                # 2. MOTOR DE CRUCE MASIVO (Por Magnitud Absoluta y Tolerancia de 3 Días)
+                # 2. MOTOR DE CRUCE MASIVO (Tolerancia 3 días y montos absolutos)
                 libro_usados = set()
                 for idx_b, row_b in banco.iterrows():
                     if banco.loc[idx_b, 'Estatus'] != 'Pendiente Banco':
@@ -145,7 +156,6 @@ if archivo_banco and archivo_libro:
                 c2.metric("Créditos (Sin Comisiones)", len(creditos_sin_comision))
                 c3.metric("Comisiones y Tarifas", len(comisiones))
 
-                # Métricas Globales
                 total_b = len(banco_validos)
                 conciliados_b = len(banco[banco['Estatus'] == 'Conciliado'])
                 porcentaje = (conciliados_b / total_b * 100) if total_b > 0 else 0
