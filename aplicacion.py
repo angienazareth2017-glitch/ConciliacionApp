@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import io
 
-# Intento seguro de importar docx para evitar caídas si no está instalado
+# Intento seguro de importar docx para el reporte en Word
 try:
     from docx import Document
     from docx.shared import Inches, Pt, RGBColor
@@ -21,14 +21,14 @@ if password_ingresada != CONTRASENA_CORRECTA:
     st.stop()
 
 # --- FUNCIÓN PARA GENERAR INFORME EN WORD (.DOCX) ---
-def generar_documento_word(total_b, conciliados_b, porcentaje, anulados_l, total_ingresos_Bs, total_egresos_Bs, total_comisiones_Bs, tasa_bcv):
+def generar_documento_word(total_b, conciliados_b, porcentaje, anulados_l, total_ingresos_Bs, total_egresos_Bs, total_comisiones_Bs, total_ingresos_usd, total_egresos_usd, total_comisiones_usd):
     if not HAS_DOCX:
         return None
     doc = Document()
     
-    title = doc.add_heading('Informe Gerencial de Conciliación Bancaria', level=0)
+    doc.add_heading('Informe Gerencial de Conciliación Bancaria', level=0)
     doc.add_paragraph('Laboratorios Quimio-Vet, C.A. | Departamento de Tesorería y Contabilidad')
-    doc.add_paragraph(f'Tasa Referencial BCV: {tasa_bcv:,.2f} Bs/USD\n')
+    doc.add_paragraph('Conversión Dinámica aplicada por Tasa BCV Diaria Histórica\n')
     
     doc.add_heading('1. Resumen Ejecutivo de Conciliación', level=1)
     p = doc.add_paragraph()
@@ -40,7 +40,7 @@ def generar_documento_word(total_b, conciliados_b, porcentaje, anulados_l, total
     p.add_run(f"{anulados_l} asientos de anulación/error").bold = True
     p.add_run(" en el mayor analítico de SAP con su debido reverso contable.")
 
-    doc.add_heading('2. Desglose de Flujos Monetarios (Bs. y USD)', level=1)
+    doc.add_heading('2. Desglose de Flujos Monetarios (Bs. y USD Histórico)', level=1)
     table = doc.add_table(rows=1, cols=3)
     table.style = 'Table Grid'
     hdr_cells = table.rows[0].cells
@@ -48,11 +48,10 @@ def generar_documento_word(total_b, conciliados_b, porcentaje, anulados_l, total
     hdr_cells[1].text = 'Monto en Bolívares (Bs.)'
     hdr_cells[2].text = 'Equivalente en Dólares (USD)'
 
-    tasa_ref = tasa_bcv if tasa_bcv > 0 else 1.0
     datos = [
-        ('Créditos Operativos (Ingresos)', f"Bs. {total_ingresos_Bs:,.2f}", f"$ {total_ingresos_Bs/tasa_ref:,.2f}"),
-        ('Débitos Operativos (Egresos)', f"Bs. {total_egresos_Bs:,.2f}", f"$ {total_egresos_Bs/tasa_ref:,.2f}"),
-        ('Comisiones y Tarifas Bancarias', f"Bs. {total_comisiones_Bs:,.2f}", f"$ {total_comisiones_Bs/tasa_ref:,.2f}"),
+        ('Créditos Operativos (Ingresos)', f"Bs. {total_ingresos_Bs:,.2f}", f"$ {total_ingresos_usd:,.2f}"),
+        ('Débitos Operativos (Egresos)', f"Bs. {total_egresos_Bs:,.2f}", f"$ {total_egresos_usd:,.2f}"),
+        ('Comisiones y Tarifas Bancarias', f"Bs. {total_comisiones_Bs:,.2f}", f"$ {total_comisiones_usd:,.2f}"),
     ]
 
     for concepto, monto_bs, monto_usd in datos:
@@ -64,7 +63,7 @@ def generar_documento_word(total_b, conciliados_b, porcentaje, anulados_l, total
     doc.add_heading('3. Observaciones de Auditoría', level=1)
     doc.add_paragraph('• Las comisiones y cargos bancarios aplicados requieren causación contable según extracto.')
     doc.add_paragraph('• Las partidas pendientes en banco responden a depósitos consolidados o transferencias por lotes en SAP.')
-    doc.add_paragraph('• Se verificó el control de errores contables detectando los registros cancelados/reversados en el libro mayor.')
+    doc.add_paragraph('• La conversión a moneda pesada se ejecutó aplicando la tasa oficial BCV correspondiente a la fecha exacta de cada transacción.')
 
     buffer = io.BytesIO()
     doc.save(buffer)
@@ -73,23 +72,25 @@ def generar_documento_word(total_b, conciliados_b, porcentaje, anulados_l, total
 
 # --- INTERFAZ PRINCIPAL STREAMLIT ---
 st.title("🏦 Agente IA de Conciliación y Análisis Financiero")
-st.write("Laboratorios Quimio-Vet, C.A. - Conciliación Avanzada, Contrapartidas, Divisas BCV e Informes Gerenciales")
+st.write("Laboratorios Quimio-Vet, C.A. - Conciliación Avanzada, Contrapartidas y Tasas BCV Diarias")
 
-# --- BARRA LATERAL: Configuración y Tasa de Conversión ---
+# --- BARRA LATERAL: Configuración ---
 st.sidebar.header("⚙️ Configuración del Motor & Divisas")
 tolerancia_dias = st.sidebar.slider("Tolerancia de fechas (días)", 0, 7, 3)
 tolerancia_monto = st.sidebar.number_input("Tolerancia en monto", min_value=0.0, value=0.0, step=0.01)
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("💱 Conversión a Moneda Pesada (USD)")
-tasa_cambio_bcv = st.sidebar.number_input("Tasa BCV referencial (Bs/USD)", min_value=1.0, value=36.5, step=0.1)
+st.sidebar.subheader("💱 Tasa BCV por Defecto (Fallback)")
+tasa_fallback = st.sidebar.number_input("Tasa si falta fecha en archivo", min_value=1.0, value=36.5, step=0.1)
 
 # --- CARGA DE ARCHIVOS ---
-col_up1, col_up2 = st.columns(2)
+col_up1, col_up2, col_up3 = st.columns(3)
 with col_up1:
-    archivo_banco = st.file_uploader("Sube tu Extracto Bancario (.xlsx)", type=["xlsx", "csv"])
+    archivo_banco = st.file_uploader("1. Extracto Bancario (.xlsx)", type=["xlsx", "csv"])
 with col_up2:
-    archivo_libro = st.file_uploader("Sube tu Mayor Analítico Contable (.xlsx)", type=["xlsx", "csv"])
+    archivo_libro = st.file_uploader("2. Mayor Analítico SAP (.xlsx)", type=["xlsx", "csv"])
+with col_up3:
+    archivo_tasas = st.file_uploader("3. Tasas BCV Diarias (.xlsx, .csv)", type=["xlsx", "csv"])
 
 # --- PROCESAMIENTO Y CONCILIACIÓN ---
 if archivo_banco and archivo_libro:
@@ -97,6 +98,18 @@ if archivo_banco and archivo_libro:
         df_banco = pd.read_excel(archivo_banco, sheet_name=0, header=5)
         df_libro = pd.read_excel(archivo_libro, sheet_name=0, header=0)
         
+        # Carga opcional de tasas BCV diarias
+        tasa_dict = {}
+        if archivo_tasas:
+            df_tasas = pd.read_excel(archivo_tasas, sheet_name=0) if archivo_tasas.name.endswith('xlsx') else pd.read_csv(archivo_tasas)
+            df_tasas.columns = [str(c).strip() for c in df_tasas.columns]
+            c_fecha_t = next((c for c in df_tasas.columns if 'fecha' in c.lower()), df_tasas.columns[0])
+            c_tasa_t = next((c for c in df_tasas.columns if 'tasa' in c.lower() or 'cambio' in c.lower() or 'valor' in c.lower()), df_tasas.columns[1])
+            
+            df_tasas['Fecha_Dt'] = pd.to_datetime(df_tasas[c_fecha_t], errors='coerce').dt.normalize()
+            df_tasas['Tasa_Num'] = pd.to_numeric(df_tasas[c_tasa_t].astype(str).str.replace(',', '.'), errors='coerce')
+            tasa_dict = dict(zip(df_tasas['Fecha_Dt'], df_tasas['Tasa_Num']))
+
         if len(df_libro) > 0 and 'Activos' in str(df_libro.iloc[0, 0]):
             df_libro = df_libro.iloc[1:].reset_index(drop=True)
 
@@ -105,8 +118,8 @@ if archivo_banco and archivo_libro:
 
         st.success("¡Archivos cargados y leídos correctamente!")
 
-        if st.button("🚀 Ejecutar Conciliación, Análisis IA e Informes"):
-            with st.spinner("Procesando cruce masivo, contrapartidas, conversiones e informes..."):
+        if st.button("🚀 Ejecutar Conciliación y Tasas Diarias"):
+            with st.spinner("Procesando cruce masivo, contrapartidas y tasas BCV diarias..."):
                 banco = df_banco.copy()
                 libro = df_libro.copy()
                 
@@ -140,7 +153,24 @@ if archivo_banco and archivo_libro:
 
                 banco['Estatus'] = 'Pendiente Banco'
                 banco['Libro_Match_Idx'] = None
-                banco['Monto_USD'] = banco['Monto_Clean'] / tasa_cambio_bcv if tasa_cambio_bcv > 0 else 0.0
+
+                # Asignación dinámica de tasa BCV por cada día del movimiento
+                tasas_aplicadas = []
+                montos_usd = []
+                for _, row in banco.iterrows():
+                    f_dt = row['Fecha_Dt']
+                    monto = row['Monto_Clean']
+                    tasa_dia = tasa_fallback
+                    if pd.notna(f_dt):
+                        f_norm = f_dt.normalize()
+                        if f_norm in tasa_dict:
+                            tasa_dia = tasa_dict[f_norm]
+                    
+                    tasas_aplicadas.append(tasa_dia)
+                    montos_usd.append(monto / tasa_dia if tasa_dia > 0 else 0.0)
+
+                banco['Tasa_BCV'] = tasas_aplicadas
+                banco['Monto_USD'] = montos_usd
 
                 col_fecha_l = next((c for c in libro.columns if 'fecha' in c.lower() and 'contabilización' in c.lower()), libro.columns[0])
                 col_comm_l = next((c for c in libro.columns if 'comentario' in c.lower()), libro.columns[6])
@@ -238,19 +268,24 @@ if archivo_banco and archivo_libro:
                 m4.metric("% Conciliado", f"{porcentaje:.1f}%")
                 m5.metric("Anulados / Errores", anulados_l)
 
-                # --- 🤖 RESUMEN GERENCIAL EN PANTALLA ---
-                st.markdown("---")
-                st.subheader("🤖 Resumen e Insights Gerenciales (IA Generativa)")
-
+                # Totales para informes
                 total_ingresos_Bs = creditos_sin_comision['Monto_Clean'].sum()
                 total_egresos_Bs = abs(debitos_sin_comision['Monto_Clean'].sum())
                 total_comisiones_Bs = abs(comisiones['Monto_Clean'].sum())
 
+                total_ingresos_usd = creditos_sin_comision['Monto_USD'].sum()
+                total_egresos_usd = abs(debitos_sin_comision['Monto_USD'].sum())
+                total_comisiones_usd = abs(comisiones['Monto_USD'].sum())
+
+                # --- 🤖 RESUMEN GERENCIAL EN PANTALLA ---
+                st.markdown("---")
+                st.subheader("🤖 Resumen e Insights Gerenciales (Tasas BCV Diarias)")
+
                 texto_ia = f"""
-                * **Diagnóstico General:** El mes registra **{total_b} movimientos bancarios** y **{anulados_l} asientos de anulación/error** identificados en SAP.
-                * **Flujo de Entradas:** **{len(creditos_sin_comision)} créditos operativos** por **Bs. {total_ingresos_Bs:,.2f}** (**$ {total_ingresos_Bs/tasa_cambio_bcv:,.2f} USD** a tasa BCV {tasa_cambio_bcv}).
-                * **Flujo de Salidas:** **{len(debitos_sin_comision)} débitos operativos** acumulando **Bs. {total_egresos_Bs:,.2f}** (**$ {total_egresos_Bs/tasa_cambio_bcv:,.2f} USD**).
-                * **Comisiones Bancarias:** **{len(comisiones)} cargos por comisiones** sumando **Bs. {total_comisiones_Bs:,.2f}** (**$ {total_comisiones_Bs/tasa_cambio_bcv:,.2f} USD**).
+                * **Diagnóstico General:** El mes registra **{total_b} movimientos bancarios** y **{anulados_l} asientos de anulación/error** en SAP.
+                * **Flujo de Entradas:** **{len(creditos_sin_comision)} créditos operativos** sumando **Bs. {total_ingresos_Bs:,.2f}** (**$ {total_ingresos_usd:,.2f} USD** aplicando tasa BCV diaria exacta).
+                * **Flujo de Salidas:** **{len(debitos_sin_comision)} débitos operativos** por **Bs. {total_egresos_Bs:,.2f}** (**$ {total_egresos_usd:,.2f} USD**).
+                * **Comisiones Bancarias:** **{len(comisiones)} cargos** sumando **Bs. {total_comisiones_Bs:,.2f}** (**$ {total_comisiones_usd:,.2f} USD**).
                 """
                 st.info(texto_ia)
 
@@ -262,6 +297,7 @@ if archivo_banco and archivo_libro:
                         'Banco_Referencia': row_b.get('Referencia'),
                         'Banco_Descripcion': row_b.get('Descripción'),
                         'Banco_Monto_Bs': row_b.get('Monto_Clean'),
+                        'Tasa_BCV_Diaria': row_b.get('Tasa_BCV'),
                         'Banco_Monto_USD': row_b.get('Monto_USD'),
                         'Estatus_Conciliacion': row_b.get('Estatus')
                     }
@@ -294,7 +330,7 @@ if archivo_banco and archivo_libro:
 
                 df_consolidado = pd.DataFrame(consolidado_rows)
 
-                st.subheader("📊 Vista Previa: Consolidado (Con Contrapartidas y Divisas)")
+                st.subheader("📊 Vista Previa: Consolidado (Con Tasas BCV Diarias)")
                 st.dataframe(df_consolidado.head(10))
 
                 # --- PANEL DE DESCARGAS ---
@@ -314,10 +350,9 @@ if archivo_banco and archivo_libro:
                         {"Indicador / Concepto": "Total Créditos Operativos (Bs.)", "Valor / Resultado": total_ingresos_Bs},
                         {"Indicador / Concepto": "Total Débitos Operativos (Bs.)", "Valor / Resultado": total_egresos_Bs},
                         {"Indicador / Concepto": "Total Comisiones Bancarias (Bs.)", "Valor / Resultado": total_comisiones_Bs},
-                        {"Indicador / Concepto": "Tasa Referencial BCV (Bs/USD)", "Valor / Resultado": tasa_cambio_bcv},
-                        {"Indicador / Concepto": "Total Créditos Operativos (USD)", "Valor / Resultado": total_ingresos_Bs / tasa_cambio_bcv if tasa_cambio_bcv > 0 else 0},
-                        {"Indicador / Concepto": "Total Débitos Operativos (USD)", "Valor / Resultado": total_egresos_Bs / tasa_cambio_bcv if tasa_cambio_bcv > 0 else 0},
-                        {"Indicador / Concepto": "Total Comisiones (USD)", "Valor / Resultado": total_comisiones_Bs / tasa_cambio_bcv if tasa_cambio_bcv > 0 else 0},
+                        {"Indicador / Concepto": "Total Créditos Operativos (USD Histórico)", "Valor / Resultado": total_ingresos_usd},
+                        {"Indicador / Concepto": "Total Débitos Operativos (USD Histórico)", "Valor / Resultado": total_egresos_usd},
+                        {"Indicador / Concepto": "Total Comisiones (USD Histórico)", "Valor / Resultado": total_comisiones_usd},
                     ])
                     df_resumen_ia.to_excel(writer, sheet_name='Resumen_Gerencial_IA', index=False)
                     df_consolidado.to_excel(writer, sheet_name='Banco_vs_Libro_Consolidado', index=False)
@@ -328,9 +363,9 @@ if archivo_banco and archivo_libro:
 
                 with col_dl1:
                     st.download_button(
-                        label="📊 Descargar Excel Completo (4 Hojas con Resumen IA)",
+                        label="📊 Descargar Excel (4 Hojas con Tasas Diarias)",
                         data=excel_data,
-                        file_name="Reporte_Conciliacion_QuimioVet_4Hojas.xlsx",
+                        file_name="Reporte_Conciliacion_QuimioVet_TasasDiarias.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         use_container_width=True
                     )
@@ -339,19 +374,20 @@ if archivo_banco and archivo_libro:
                     if HAS_DOCX:
                         doc_word_buffer = generar_documento_word(
                             total_b, conciliados_b, porcentaje, anulados_l,
-                            total_ingresos_Bs, total_egresos_Bs, total_comisiones_Bs, tasa_cambio_bcv
+                            total_ingresos_Bs, total_egresos_Bs, total_comisiones_Bs,
+                            total_ingresos_usd, total_egresos_usd, total_comisiones_usd
                         )
                         st.download_button(
-                            label="📄 Descargar Informe Gerencial en Word (.docx)",
+                            label="📄 Descargar Informe Word (.docx)",
                             data=doc_word_buffer,
-                            file_name="Informe_Gerencial_Conciliacion_QuimioVet.docx",
+                            file_name="Informe_Gerencial_QuimioVet.docx",
                             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                             use_container_width=True
                         )
                     else:
-                        st.info("💡 Para habilitar la descarga en Word, agrega 'python-docx' a tu requirements.txt. El reporte en Excel de 4 hojas funciona completo.")
+                        st.info("💡 Instala 'python-docx' para habilitar la descarga en Word.")
 
     except Exception as e:
         st.error(f"Error procesando los archivos: {e}")
 else:
-    st.info("Por favor, sube ambos archivos para activar el motor de conciliación y la generación de reportes.")
+    st.info("Por favor, sube al menos el extracto bancario y el mayor analítico de SAP para activar el motor.")
