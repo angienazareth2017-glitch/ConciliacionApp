@@ -98,7 +98,7 @@ if archivo_banco and archivo_libro:
         df_banco = pd.read_excel(archivo_banco, sheet_name=0, header=5)
         df_libro = pd.read_excel(archivo_libro, sheet_name=0, header=0)
         
-        # Carga segura y robusta de tasas BCV diarias
+        # Carga robusta y corregida de tasas BCV diarias con dayfirst=True
         tasa_dict = {}
         if archivo_tasas:
             try:
@@ -108,9 +108,11 @@ if archivo_banco and archivo_libro:
                     c_fecha_t = next((c for c in df_tasas.columns if 'fecha' in c.lower()), df_tasas.columns[0])
                     c_tasa_t = next((c for c in df_tasas.columns if 'tasa' in c.lower() or 'cambio' in c.lower() or 'valor' in c.lower()), df_tasas.columns[1])
                     
-                    df_tasas['Fecha_Dt'] = pd.to_datetime(df_tasas[c_fecha_t], errors='coerce').dt.normalize()
+                    # Corrección clave: dayfirst=True para formato venezolano DD/MM/YYYY
+                    df_tasas['Fecha_Dt'] = pd.to_datetime(df_tasas[c_fecha_t], errors='coerce', dayfirst=True).dt.normalize()
                     df_tasas['Tasa_Num'] = pd.to_numeric(df_tasas[c_tasa_t].astype(str).str.replace(',', '.'), errors='coerce')
                     tasa_dict = dict(zip(df_tasas['Fecha_Dt'], df_tasas['Tasa_Num']))
+                    st.success(f"¡Se cargaron exitosamente {len(tasa_dict)} tasas diarias desde el archivo!")
             except Exception as e:
                 st.sidebar.warning(f"No se pudo leer el archivo de tasas: {e}. Se usará la tasa por defecto.")
 
