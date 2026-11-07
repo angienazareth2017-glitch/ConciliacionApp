@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import requests
 import io
 
 # Intento seguro de importar docx para el reporte en Word
@@ -20,6 +21,26 @@ if password_ingresada != CONTRASENA_CORRECTA:
     st.warning("🔒 Por favor, introduzca la contraseña correcta en la barra lateral para acceder al agente.")
     st.stop()
 
+# --- FUNCIÓN PARA OBTENER TASAS BCV DESDE LA API PÚBLICA ---
+def obtener_tasas_bcv_api():
+    try:
+        url = "https://bcv.today/api/v1/history.json"
+        response = requests.get(url, timeout=8)
+        if response.status_code == 200:
+            data = response.json()
+            tasa_dict = {}
+            for item in data:
+                fecha_str = item.get('date') or item.get('effective_date')
+                tasa_usd = item.get('USD')
+                if fecha_str and tasa_usd:
+                    f_norm = pd.to_datetime(fecha_str, errors='coerce').strftime('%Y-%m-%d')
+                    if f_norm:
+                        tasa_dict[f_norm] = float(tasa_usd)
+            return tasa_dict
+    except Exception:
+        pass
+    return {}
+
 # --- FUNCIÓN PARA GENERAR INFORME EN WORD (.DOCX) ---
 def generar_documento_word(total_b, conciliados_b, porcentaje, anulados_l, total_ingresos_Bs, total_egresos_Bs, total_comisiones_Bs, total_ingresos_usd, total_egresos_usd, total_comisiones_usd):
     if not HAS_DOCX:
@@ -28,7 +49,7 @@ def generar_documento_word(total_b, conciliados_b, porcentaje, anulados_l, total
     
     doc.add_heading('Informe Gerencial de Conciliación Bancaria', level=0)
     doc.add_paragraph('Laboratorios Quimio-Vet, C.A. | Departamento de Tesorería y Contabilidad')
-    doc.add_paragraph('Conversión Dinámica aplicada por Tasa BCV Diaria Histórica\n')
+    doc.add_paragraph('Conversión Dinámica aplicada por Tasa BCV Diaria Histórica (Sincronización Automática)\n')
     
     doc.add_heading('1. Resumen Ejecutivo de Conciliación', level=1)
     p = doc.add_paragraph()
@@ -63,7 +84,7 @@ def generar_documento_word(total_b, conciliados_b, porcentaje, anulados_l, total
     doc.add_heading('3. Observaciones de Auditoría', level=1)
     doc.add_paragraph('• Las comisiones y cargos bancarios aplicados requieren causación contable según extracto.')
     doc.add_paragraph('• Las partidas pendientes en banco responden a depósitos consolidados o transferencias por lotes en SAP.')
-    doc.add_paragraph('• La conversión a moneda pesada se ejecutó aplicando la tasa oficial BCV correspondiente a la fecha exacta de cada transacción.')
+    doc.add_paragraph('• La conversión a moneda pesada se ejecutó aplicando la tasa oficial BCV histórica obtenida vía API en tiempo real.')
 
     buffer = io.BytesIO()
     doc.save(buffer)
@@ -72,7 +93,7 @@ def generar_documento_word(total_b, conciliados_b, porcentaje, anulados_l, total
 
 # --- INTERFAZ PRINCIPAL STREAMLIT ---
 st.title("🏦 Agente IA de Conciliación y Análisis Financiero")
-st.write("Laboratorios Quimio-Vet, C.A. - Conciliación Avanzada, Contrapartidas y Tasas BCV Diarias")
+st.write("Laboratorios Quimio-Vet, C.A. - Conciliación Avanzada, Contrapartidas y Tasas BCV Automatizadas")
 
 # --- BARRA LATERAL: Configuración ---
 st.sidebar.header("⚙️ Configuración del Motor & Divisas")
@@ -81,7 +102,7 @@ tolerancia_monto = st.sidebar.number_input("Tolerancia en monto", min_value=0.0,
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("💱 Tasa BCV por Defecto (Fallback)")
-tasa_fallback = st.sidebar.number_input("Tasa si falta fecha en archivo", min_value=1.0, value=36.5, step=0.1)
+tasa_fallback = st.sidebar.number_input("Tasa de respaldo si falla API/Archivo", min_value=1.0, value=36.5, step=0.1)
 
 # --- CARGA DE ARCHIVOS ---
 col_up1, col_up2, col_up3 = st.columns(3)
@@ -90,7 +111,7 @@ with col_up1:
 with col_up2:
     archivo_libro = st.file_uploader("2. Mayor Analítico SAP (.xlsx)", type=["xlsx", "csv"])
 with col_up3:
-    archivo_tasas = st.file_uploader("3. Tasas BCV Diarias (.xlsx, .csv)", type=["xlsx", "csv"])
+    archivo_tasas = st.file_uploader("3. Tasas BCV Opcional (Excel/CSV)", type=["xlsx", "csv"])
 
 # --- PROCESAMIENTO Y CONCILIACIÓN ---
 if archivo_banco and archivo_libro:
@@ -98,26 +119,30 @@ if archivo_banco and archivo_libro:
         df_banco = pd.read_excel(archivo_banco, sheet_name=0, header=5)
         df_libro = pd.read_excel(archivo_libro, sheet_name=0, header=0)
         
-        # Carga ultra-robusta de tasas BCV diarias con conversión estricta a string/fecha
-        tasa_dict = {}
+        # 1. CARGA INTELIGENTE: Intenta API primero, complementa o sobrescribe con Excel si el usuario lo sube
+        tasa_dict = obtener_tasas_bcv_api()
+        if tasa_dict:
+            st.sidebar.success(f"🌐 Sincronizado con API BCV: {len(tasa_dict)} días históricos.")
+        else:
+            st.sidebar.warning("⚠️ Sin conexión a API. Usando respaldo local.")
+
         if archivo_tasas:
             try:
                 df_tasas = pd.read_excel(archivo_tasas, sheet_name=0) if archivo_tasas.name.endswith('xlsx') else pd.read_csv(archivo_tasas)
                 if len(df_tasas) > 0 and len(df_tasas.columns) >= 2:
                     df_tasas.columns = [str(c).strip() for c in df_tasas.columns]
-                    
                     c_fecha_t = next((c for c in df_tasas.columns if 'fecha' in c.lower() or 'dia' in c.lower()), df_tasas.columns[0])
                     c_tasa_t = next((c for c in df_tasas.columns if 'tasa' in c.lower() or 'cambio' in c.lower() or 'valor' in c.lower() or '$' in c.lower() or 'bcv' in c.lower()), df_tasas.columns[1])
                     
-                    # Normalizar a string de fecha YYYY-MM-DD para evitar errores de timestamp
-                    df_tasas['Fecha_Str'] = pd.to_datetime(df_tasas[c_fecha_t], errors='coerce', dayfirst=True).dt.strftime('%Y-%m-%d')
-                    df_tasas['Tasa_Num'] = pd.to_numeric(df_tasas[c_tasa_t].astype(str).str.replace(',', '.'), errors='coerce')
+                    fechas_dt_t = pd.to_datetime(df_tasas[c_fecha_t].astype(str).str.strip(), errors='coerce', dayfirst=True)
+                    df_tasas['Fecha_Str'] = fechas_dt_t.dt.strftime('%Y-%m-%d')
+                    df_tasas['Tasa_Num'] = pd.to_numeric(df_tasas[c_tasa_t].astype(str).str.replace(',', '.').str.strip(), errors='coerce')
                     
-                    df_tasas = df_tasas.dropna(subset=['Fecha_Str', 'Tasa_Num'])
-                    tasa_dict = dict(zip(df_tasas['Fecha_Str'], df_tasas['Tasa_Num']))
-                    st.success(f"✅ Tasas BCV cargadas exitosamente: {len(tasa_dict)} días registrados.")
+                    for _, r in df_tasas.dropna(subset=['Fecha_Str', 'Tasa_Num']).iterrows():
+                        tasa_dict[r['Fecha_Str']] = r['Tasa_Num']
+                st.success("📁 Tasas complementadas/actualizadas desde el archivo adjunto.")
             except Exception as e:
-                st.sidebar.warning(f"Advertencia al leer tasas: {e}. Se usará la tasa por defecto.")
+                st.sidebar.warning(f"Error leyendo archivo local de tasas: {e}")
 
         if len(df_libro) > 0 and 'Activos' in str(df_libro.iloc[0, 0]):
             df_libro = df_libro.iloc[1:].reset_index(drop=True)
@@ -127,8 +152,8 @@ if archivo_banco and archivo_libro:
 
         st.success("¡Archivos cargados y leídos correctamente!")
 
-        if st.button("🚀 Ejecutar Conciliación y Tasas Diarias"):
-            with st.spinner("Procesando cruce masivo, contrapartidas y tasas BCV diarias..."):
+        if st.button("🚀 Ejecutar Conciliación y Conversión BCV en Vivo"):
+            with st.spinner("Procesando cruce masivo, contrapartidas y tasas BCV dinámicas..."):
                 banco = df_banco.copy()
                 libro = df_libro.copy()
                 
@@ -157,14 +182,18 @@ if archivo_banco and archivo_libro:
 
                 banco['Monto_Clean'] = pd.to_numeric(banco[col_monto_b], errors='coerce').fillna(0)
                 
-                # Conversión estricta de fecha del banco a string YYYY-MM-DD para emparejar con el diccionario de tasas
-                banco['Fecha_Str'] = pd.to_datetime(banco[col_fecha_b], errors='coerce', dayfirst=True).dt.strftime('%Y-%m-%d')
-                banco['Fecha_Dt'] = pd.to_datetime(banco[col_fecha_b], errors='coerce', dayfirst=True).dt.normalize()
+                fechas_b_raw = banco[col_fecha_b].astype(str).str.strip()
+                fechas_dt_b = pd.to_datetime(fechas_b_raw, errors='coerce', dayfirst=True)
+                if fechas_dt_b.isna().sum() > len(banco) * 0.5:
+                    fechas_dt_b = pd.to_datetime(fechas_b_raw, errors='coerce')
+
+                banco['Fecha_Str'] = fechas_dt_b.dt.strftime('%Y-%m-%d')
+                banco['Fecha_Dt'] = fechas_dt_b.dt.normalize()
 
                 banco['Estatus'] = 'Pendiente Banco'
                 banco['Libro_Match_Idx'] = None
 
-                # Asignación de tasa BCV usando las cadenas YYYY-MM-DD
+                # Asignación automática de tasa BCV diaria por fecha exacta
                 tasas_aplicadas = []
                 montos_usd = []
                 for _, row in banco.iterrows():
@@ -277,7 +306,6 @@ if archivo_banco and archivo_libro:
                 m4.metric("% Conciliado", f"{porcentaje:.1f}%")
                 m5.metric("Anulados / Errores", anulados_l)
 
-                # Totales para informes
                 total_ingresos_Bs = creditos_sin_comision['Monto_Clean'].sum()
                 total_egresos_Bs = abs(debitos_sin_comision['Monto_Clean'].sum())
                 total_comisiones_Bs = abs(comisiones['Monto_Clean'].sum())
@@ -286,7 +314,6 @@ if archivo_banco and archivo_libro:
                 total_egresos_usd = abs(debitos_sin_comision['Monto_USD'].sum())
                 total_comisiones_usd = abs(comisiones['Monto_USD'].sum())
 
-                # --- 🤖 RESUMEN GERENCIAL EN PANTALLA ---
                 st.markdown("---")
                 st.subheader("🤖 Resumen e Insights Gerenciales (Tasas BCV Diarias)")
 
@@ -322,7 +349,7 @@ if archivo_banco and archivo_libro:
                             'Cuenta_Contrapartida': r_libro.get('Cuenta de contrapartida'),
                             'Nombre_Cuenta_Contrapartida': r_libro.get('Nombre de la cuenta de contrapartida'),
                             'Libro_Cargo_Egreso': r_libro.get('Cargo (ML)'),
-                            'Libro_Abono_Ingreso': r_libro.get('Abono (ML)')
+                            'Libro_Abono_Ingreso': r_logit := r_libro.get('Abono (ML)')
                         })
                     else:
                         fila_cons.update({
@@ -347,7 +374,6 @@ if archivo_banco and archivo_libro:
                 st.subheader("📥 Exportar Resultados y Reportes")
                 col_dl1, col_dl2 = st.columns(2)
 
-                # Excel de 4 Hojas
                 output_excel = io.BytesIO()
                 with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
                     df_resumen_ia = pd.DataFrame([
@@ -399,4 +425,4 @@ if archivo_banco and archivo_libro:
     except Exception as e:
         st.error(f"Error procesando los archivos: {e}")
 else:
-    st.info("Por favor, sube al menos el extracto bancario y el mayor analítico de SAP para activar el motor.")
+    st.info("Por favor, sube el extracto bancario y el mayor analítico de SAP para activar el motor.")
