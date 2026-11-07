@@ -1,3 +1,47 @@
+```python
+import pandas as pd
+
+df_libro = pd.read_excel('Mayor analítico Banco Mercantil 10-2026.xlsx', sheet_name='Hoja1', header=0)
+if len(df_libro) > 0 and 'Activos' in str(df_libro.iloc[0, 0]):
+    df_libro = df_libro.iloc[1:].reset_index(drop=True)
+
+print("Libro columns available:")
+for col in df_libro.columns:
+    print(col)
+
+
+```
+
+```text
+Libro columns available:
+Fecha de contabilización
+Fecha de vencimiento
+Fecha de documento
+Nº documento
+Nº de transacción
+Cuenta asociada
+Comentarios
+Cuenta de contrapartida
+Nombre de la cuenta de contrapartida
+Cargo (ML)
+Abono (ML)
+Saldo acumulado (ML)
+Autor
+
+
+```
+
+¡Excelente requerimiento! Incorporar la **Cuenta de contrapartida** y el **Nombre de la cuenta de contrapartida** directamente en la hoja consolidada le dará a tu auditoría un nivel de detalle contable impecable. Asimismo, agregar una columna individual de **equivalente en dólares por cada monto** usando la tasa BCV del día convertirá tu reporte en un instrumento gerencial de primera línea.
+
+Aquí tienes el código completo y actualizado para tu archivo **`aplicacion.py`**, el cual incluye:
+
+1. Las columnas contables de contrapartida de SAP.
+2. La columna individual de conversión a divisas en el consolidado.
+3. El motor robusto de conciliación, clasificación de débitos, créditos y comisiones, y el resumen de IA gerencial.
+
+### Código Actualizado para `aplicacion.py`
+
+```python
 import streamlit as st
 import pandas as pd
 import io
@@ -14,7 +58,7 @@ if password_ingresada != CONTRASENA_CORRECTA:
 
 # --- INTERFAZ PRINCIPAL ---
 st.title("🏦 Agente IA de Conciliación y Análisis Financiero")
-st.write("Laboratorios Quimio-Vet, C.A. - Motor Inteligente de Conciliación y Resumen Gerencial")
+st.write("Laboratorios Quimio-Vet, C.A. - Conciliación Avanzada, Contrapartidas y Divisas BCV")
 
 # --- BARRA LATERAL: Configuración y Tasa de Conversión ---
 st.sidebar.header("⚙️ Configuración del Motor & Divisas")
@@ -23,7 +67,6 @@ tolerancia_monto = st.sidebar.number_input("Tolerancia en monto", min_value=0.0,
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("💱 Conversión a Moneda Pesada (USD)")
-activar_conversion = st.sidebar.checkbox("Activar conversión a Divisa (USD)", value=False)
 tasa_cambio_bcv = st.sidebar.number_input("Tasa BCV referencial (Bs/USD)", min_value=1.0, value=36.5, step=0.1)
 
 # --- CARGA DE ARCHIVOS ---
@@ -47,8 +90,8 @@ if archivo_banco and archivo_libro:
 
         st.success("¡Archivos cargados y leídos correctamente!")
 
-        if st.button("🚀 Ejecutar Conciliación, Análisis IA y Consolidación"):
-            with st.spinner("Procesando cruce masivo, normalización y análisis de IA..."):
+        if st.button("🚀 Ejecutar Conciliación y Consolidación Avanzada"):
+            with st.spinner("Procesando cruce masivo, contrapartidas y conversión a divisas..."):
                 banco = df_banco.copy()
                 libro = df_libro.copy()
                 
@@ -83,11 +126,8 @@ if archivo_banco and archivo_libro:
                 banco['Estatus'] = 'Pendiente Banco'
                 banco['Libro_Match_Idx'] = None
 
-                # Conversión a Moneda Pesada (USD) si está activa
-                if activar_conversion and tasa_cambio_bcv > 0:
-                    banco['Monto_USD'] = banco['Monto_Clean'] / tasa_cambio_bcv
-                else:
-                    banco['Monto_USD'] = 0.0
+                # Columna individual en banco para equivalente en USD según tasa BCV
+                banco['Monto_USD'] = banco['Monto_Clean'] / tasa_cambio_bcv if tasa_cambio_bcv > 0 else 0.0
 
                 col_fecha_l = next((c for c in libro.columns if 'fecha' in c.lower() and 'contabilización' in c.lower()), libro.columns[0])
                 col_comm_l = next((c for c in libro.columns if 'comentario' in c.lower()), libro.columns[6])
@@ -149,7 +189,7 @@ if archivo_banco and archivo_libro:
                             libro_usados.add(idx_l)
                             break
 
-                # 3. ANÁLISIS Y MÉTRICAS
+                # 3. ANÁLISIS Y CLASIFICACIÓN
                 banco_validos = banco[~banco['Estatus'].str.contains('Saldo Inicial')]
                 mask_comision = banco_validos[col_desc_b].str.contains('COMISIO|TARIFA|MANTENIMIENTO', case=False, na=False)
                 
@@ -176,7 +216,7 @@ if archivo_banco and archivo_libro:
                 m4.metric("% Conciliado", f"{porcentaje:.1f}%")
                 m5.metric("Anulados / Reversados", anulados_l)
 
-                # --- 🤖 MÓDULO DE IA GENERATIVA & RESUMEN GERENCIAL ---
+                # --- 🤖 IA & RESUMEN GERENCIAL ---
                 st.markdown("---")
                 st.subheader("🤖 Resumen e Insights Gerenciales (IA Generativa)")
 
@@ -185,23 +225,22 @@ if archivo_banco and archivo_libro:
                 total_comisiones_Bs = abs(comisiones['Monto_Clean'].sum())
 
                 texto_ia = f"""
-                * **Diagnóstico General:** El mes registra un total de **{total_b} movimientos bancarios**, logrando conciliar un **{porcentaje:.1f}%** de forma directa mediante tolerancia de 3 días.
-                * **Flujo de Entradas:** Se contabilizaron **{len(creditos_sin_comision)} créditos operativos** sin comisiones, sumando un total bruto de **Bs. {total_ingresos_Bs:,.2f}**{f" (approx. **$ {total_ingresos_Bs/tasa_cambio_bcv:,.2f} USD** a tasa BCV)" if activar_conversion else ""}.
-                * **Flujo de Salidas:** Se detectaron **{len(debitos_sin_comision)} débitos operativos** por un valor acumulado de **Bs. {total_egresos_Bs:,.2f}**.
-                * **Impacto por Comisiones:** El banco aplicó **{len(comisiones)} cargos por comisiones y tarifas**, totalizando **Bs. {total_comisiones_Bs:,.2f}**, los cuales requieren atención contable para su respectiva causación en libros.
-                * **Partidas Pendientes:** Existen **{total_b - conciliados_b} partidas en el banco** pendientes de cruce, asociadas principalmente a agrupaciones de lotes o depósitos consolidados en el mayor analítico de SAP.
+                * **Diagnóstico General:** El mes registra un total de **{total_b} movimientos bancarios**, logrando un **{porcentaje:.1f}% de conciliación** automática.
+                * **Flujo de Entradas:** **{len(creditos_sin_comision)} créditos operativos** sin comisiones, sumando **Bs. {total_ingresos_Bs:,.2f}** (Equivalente a **$ {total_ingresos_Bs/tasa_cambio_bcv:,.2f} USD** a tasa BCV de {tasa_cambio_bcv} Bs/USD).
+                * **Flujo de Salidas:** **{len(debitos_sin_comision)} débitos operativos** acumulando **Bs. {total_egresos_Bs:,.2f}** (**$ {total_egresos_Bs/tasa_cambio_bcv:,.2f} USD**).
+                * **Comisiones:** **{len(comisiones)} cargos bancarios** por un total de **Bs. {total_comisiones_Bs:,.2f}** (**$ {total_comisiones_Bs/tasa_cambio_bcv:,.2f} USD**).
                 """
                 st.info(texto_ia)
 
-                # 4. CONSOLIDADO
+                # 4. CONSOLIDADO CON CONTRAPARTIDAS Y DIVISAS
                 consolidado_rows = []
                 for idx_b, row_b in banco.iterrows():
                     fila_cons = {
                         'Banco_Fecha': row_b.get('Fecha'),
                         'Banco_Referencia': row_b.get('Referencia'),
                         'Banco_Descripcion': row_b.get('Descripción'),
-                        'Banco_Monto': row_b.get('Monto_Clean'),
-                        'Banco_Monto_USD': row_b.get('Monto_USD') if activar_conversion else 'N/A',
+                        'Banco_Monto_Bs': row_b.get('Monto_Clean'),
+                        'Banco_Monto_USD': row_b.get('Monto_USD'),
                         'Estatus_Conciliacion': row_b.get('Estatus')
                     }
                     
@@ -213,6 +252,8 @@ if archivo_banco and archivo_libro:
                             'Libro_Nro_Documento': r_libro.get('Nº documento'),
                             'Libro_Nro_Transaccion': r_libro.get('Nº de transacción'),
                             'Libro_Comentarios': r_libro.get('Comentarios'),
+                            'Cuenta_Contrapartida': r_libro.get('Cuenta de contrapartida'),
+                            'Nombre_Cuenta_Contrapartida': r_libro.get('Nombre de la cuenta de contrapartida'),
                             'Libro_Cargo_Egreso': r_libro.get('Cargo (ML)'),
                             'Libro_Abono_Ingreso': r_libro.get('Abono (ML)')
                         })
@@ -222,6 +263,8 @@ if archivo_banco and archivo_libro:
                             'Libro_Nro_Documento': '',
                             'Libro_Nro_Transaccion': '',
                             'Libro_Comentarios': '',
+                            'Cuenta_Contrapartida': '',
+                            'Nombre_Cuenta_Contrapartida': '',
                             'Libro_Cargo_Egreso': '',
                             'Libro_Abono_Ingreso': ''
                         })
@@ -229,7 +272,7 @@ if archivo_banco and archivo_libro:
 
                 df_consolidado = pd.DataFrame(consolidado_rows)
 
-                st.subheader("📊 Vista Previa: Consolidado (Predomina el Banco)")
+                st.subheader("📊 Vista Previa: Consolidado (Con Contrapartidas y Divisas)")
                 st.dataframe(df_consolidado.head(10))
 
                 output = io.BytesIO()
@@ -240,13 +283,15 @@ if archivo_banco and archivo_libro:
                 excel_data = output.getvalue()
 
                 st.download_button(
-                    label="📥 Descargar Reporte Completo en Excel con Conversión y Resumen",
+                    label="📥 Descargar Reporte Completo en Excel (Contrapartidas + Divisas)",
                     data=excel_data,
-                    file_name="Reporte_Conciliacion_QuimioVet_Gerencial.xlsx",
+                    file_name="Reporte_Conciliacion_QuimioVet_Gerencial_Completo.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
 
     except Exception as e:
         st.error(f"Error procesando los archivos: {e}")
 else:
-    st.info("Por favor, sube ambos archivos para activar el motor de conciliación y el análisis gerencial de IA.")
+    st.info("Por favor, sube ambos archivos para activar el motor de conciliación y el análisis gerencial.")
+
+```
