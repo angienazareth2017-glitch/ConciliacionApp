@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import io
 
-st.set_page_config(page_title="Agente de Conciliación Bancaria - Quimio-Vet", layout="wide")
+st.set_page_config(page_title="Agente IA de Conciliación y Análisis - Quimio-Vet", layout="wide")
 
 # --- SISTEMA DE CONTRASEÑA PRIVADA ---
 password_ingresada = st.sidebar.text_input("Ingrese su contraseña", type="password")
@@ -13,13 +13,18 @@ if password_ingresada != CONTRASENA_CORRECTA:
     st.stop()
 
 # --- INTERFAZ PRINCIPAL ---
-st.title("🏦 Agente de Conciliación Bancaria Inteligente")
-st.write("Laboratorios Quimio-Vet, C.A. - Conciliación Automatizada y Consolidación")
+st.title("🏦 Agente IA de Conciliación y Análisis Financiero")
+st.write("Laboratorios Quimio-Vet, C.A. - Motor Inteligente de Conciliación y Resumen Gerencial")
 
-# --- BARRA LATERAL: Configuración ---
-st.sidebar.header("⚙️ Configuración del Motor")
+# --- BARRA LATERAL: Configuración y Tasa de Conversión ---
+st.sidebar.header("⚙️ Configuración del Motor & Divisas")
 tolerancia_dias = st.sidebar.slider("Tolerancia de fechas (días)", 0, 7, 3)
 tolerancia_monto = st.sidebar.number_input("Tolerancia en monto", min_value=0.0, value=0.0, step=0.01)
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("💱 Conversión a Moneda Pesada (USD)")
+activar_conversion = st.sidebar.checkbox("Activar conversión a Divisa (USD)", value=False)
+tasa_cambio_bcv = st.sidebar.number_input("Tasa BCV referencial (Bs/USD)", min_value=1.0, value=36.5, step=0.1)
 
 # --- CARGA DE ARCHIVOS ---
 col_up1, col_up2 = st.columns(2)
@@ -42,8 +47,8 @@ if archivo_banco and archivo_libro:
 
         st.success("¡Archivos cargados y leídos correctamente!")
 
-        if st.button("🚀 Ejecutar Conciliación Masiva"):
-            with st.spinner("Procesando cruce masivo de partidas y normalización..."):
+        if st.button("🚀 Ejecutar Conciliación, Análisis IA y Consolidación"):
+            with st.spinner("Procesando cruce masivo, normalización y análisis de IA..."):
                 banco = df_banco.copy()
                 libro = df_libro.copy()
                 
@@ -51,7 +56,6 @@ if archivo_banco and archivo_libro:
                     if pd.isna(val):
                         return 0.0
                     s = str(val).replace('BsS', '').replace('Bs.', '').strip()
-                    # Si el formato usa comas para miles y puntos para decimales o viceversa
                     if ',' in s and '.' in s:
                         if s.rfind(',') > s.rfind('.'):
                             s = s.replace('.', '').replace(',', '.')
@@ -59,10 +63,8 @@ if archivo_banco and archivo_libro:
                             s = s.replace(',', '')
                     elif ',' in s:
                         s = s.replace(',', '.')
-                    
                     try:
                         num = float(s)
-                        # Auto-escala si el número es proporcionalmente mayor por formato SAP
                         if abs(num) > 100000000: 
                             return num / 100.0
                         return num
@@ -81,6 +83,12 @@ if archivo_banco and archivo_libro:
                 banco['Estatus'] = 'Pendiente Banco'
                 banco['Libro_Match_Idx'] = None
 
+                # Conversión a Moneda Pesada (USD) si está activa
+                if activar_conversion and tasa_cambio_bcv > 0:
+                    banco['Monto_USD'] = banco['Monto_Clean'] / tasa_cambio_bcv
+                else:
+                    banco['Monto_USD'] = 0.0
+
                 col_fecha_l = next((c for c in libro.columns if 'fecha' in c.lower() and 'contabilización' in c.lower()), libro.columns[0])
                 col_comm_l = next((c for c in libro.columns if 'comentario' in c.lower()), libro.columns[6])
                 col_cargo_l = next((c for c in libro.columns if 'cargo' in c.lower()), 'Cargo (ML)')
@@ -88,7 +96,6 @@ if archivo_banco and archivo_libro:
 
                 libro['Cargo_Num'] = libro[col_cargo_l].apply(limpiar_monto_flexible)
                 libro['Abono_Num'] = libro[col_abono_l].apply(limpiar_monto_flexible)
-                
                 libro['Monto_Abs'] = libro[['Cargo_Num', 'Abono_Num']].max(axis=1)
                 libro['Fecha_Dt'] = pd.to_datetime(libro[col_fecha_l], errors='coerce')
                 libro['Estatus'] = 'Pendiente Libros'
@@ -111,7 +118,7 @@ if archivo_banco and archivo_libro:
                     if (carg == 0 and abon == 0) or ('ANUL' in comm) or (carg > 0 and abon > 0 and carg == abon):
                         libro.loc[idx_l, 'Estatus'] = 'Anulado / Reversado'
 
-                # 2. MOTOR DE CRUCE MASIVO (Tolerancia 3 días y montos absolutos)
+                # 2. MOTOR DE CRUCE MASIVO
                 libro_usados = set()
                 for idx_b, row_b in banco.iterrows():
                     if banco.loc[idx_b, 'Estatus'] != 'Pendiente Banco':
@@ -142,7 +149,7 @@ if archivo_banco and archivo_libro:
                             libro_usados.add(idx_l)
                             break
 
-                # 3. ANÁLISIS Y CLASIFICACIÓN DE MOVIMIENTOS DEL BANCO
+                # 3. ANÁLISIS Y MÉTRICAS
                 banco_validos = banco[~banco['Estatus'].str.contains('Saldo Inicial')]
                 mask_comision = banco_validos[col_desc_b].str.contains('COMISIO|TARIFA|MANTENIMIENTO', case=False, na=False)
                 
@@ -169,6 +176,23 @@ if archivo_banco and archivo_libro:
                 m4.metric("% Conciliado", f"{porcentaje:.1f}%")
                 m5.metric("Anulados / Reversados", anulados_l)
 
+                # --- 🤖 MÓDULO DE IA GENERATIVA & RESUMEN GERENCIAL ---
+                st.markdown("---")
+                st.subheader("🤖 Resumen e Insights Gerenciales (IA Generativa)")
+
+                total_ingresos_Bs = creditos_sin_comision['Monto_Clean'].sum()
+                total_egresos_Bs = abs(debitos_sin_comision['Monto_Clean'].sum())
+                total_comisiones_Bs = abs(comisiones['Monto_Clean'].sum())
+
+                texto_ia = f"""
+                * **Diagnóstico General:** El mes registra un total de **{total_b} movimientos bancarios**, logrando conciliar un **{porcentaje:.1f}%** de forma directa mediante tolerancia de 3 días.
+                * **Flujo de Entradas:** Se contabilizaron **{len(creditos_sin_comision)} créditos operativos** sin comisiones, sumando un total bruto de **Bs. {total_ingresos_Bs:,.2f}**{f" (approx. **$ {total_ingresos_Bs/tasa_cambio_bcv:,.2f} USD** a tasa BCV)" if activar_conversion else ""}.
+                * **Flujo de Salidas:** Se detectaron **{len(debitos_sin_comision)} débitos operativos** por un valor acumulado de **Bs. {total_egresos_Bs:,.2f}**.
+                * **Impacto por Comisiones:** El banco aplicó **{len(comisiones)} cargos por comisiones y tarifas**, totalizando **Bs. {total_comisiones_Bs:,.2f}**, los cuales requieren atención contable para su respectiva causación en libros.
+                * **Partidas Pendientes:** Existen **{total_b - conciliados_b} partidas en el banco** pendientes de cruce, asociadas principalmente a agrupaciones de lotes o depósitos consolidados en el mayor analítico de SAP.
+                """
+                st.info(texto_ia)
+
                 # 4. CONSOLIDADO
                 consolidado_rows = []
                 for idx_b, row_b in banco.iterrows():
@@ -177,6 +201,7 @@ if archivo_banco and archivo_libro:
                         'Banco_Referencia': row_b.get('Referencia'),
                         'Banco_Descripcion': row_b.get('Descripción'),
                         'Banco_Monto': row_b.get('Monto_Clean'),
+                        'Banco_Monto_USD': row_b.get('Monto_USD') if activar_conversion else 'N/A',
                         'Estatus_Conciliacion': row_b.get('Estatus')
                     }
                     
@@ -215,13 +240,13 @@ if archivo_banco and archivo_libro:
                 excel_data = output.getvalue()
 
                 st.download_button(
-                    label="📥 Descargar Reporte Completo en Excel (3 Hojas)",
+                    label="📥 Descargar Reporte Completo en Excel con Conversión y Resumen",
                     data=excel_data,
-                    file_name="Reporte_Conciliacion_QuimioVet_Final.xlsx",
+                    file_name="Reporte_Conciliacion_QuimioVet_Gerencial.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
 
     except Exception as e:
         st.error(f"Error procesando los archivos: {e}")
 else:
-    st.info("Por favor, sube ambos archivos para activar el motor de conciliación.")
+    st.info("Por favor, sube ambos archivos para activar el motor de conciliación y el análisis gerencial de IA.")
