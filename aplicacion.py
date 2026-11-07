@@ -25,7 +25,7 @@ if password_ingresada != CONTRASENA_CORRECTA:
 def obtener_tasas_bcv_api():
     try:
         url = "https://bcv.today/api/v1/history.json"
-        response = requests.get(url, timeout=8)
+        response = requests.get(url, timeout=5)
         if response.status_code == 200:
             data = response.json()
             tasa_dict = {}
@@ -49,7 +49,7 @@ def generar_documento_word(total_b, conciliados_b, porcentaje, anulados_l, total
     
     doc.add_heading('Informe Gerencial de Conciliación Bancaria', level=0)
     doc.add_paragraph('Laboratorios Quimio-Vet, C.A. | Departamento de Tesorería y Contabilidad')
-    doc.add_paragraph('Conversión Dinámica aplicada por Tasa BCV Diaria Histórica (Sincronización Automática)\n')
+    doc.add_paragraph('Conversión Dinámica aplicada por Tasa BCV Diaria Histórica\n')
     
     doc.add_heading('1. Resumen Ejecutivo de Conciliación', level=1)
     p = doc.add_paragraph()
@@ -84,7 +84,7 @@ def generar_documento_word(total_b, conciliados_b, porcentaje, anulados_l, total
     doc.add_heading('3. Observaciones de Auditoría', level=1)
     doc.add_paragraph('• Las comisiones y cargos bancarios aplicados requieren causación contable según extracto.')
     doc.add_paragraph('• Las partidas pendientes en banco responden a depósitos consolidados o transferencias por lotes en SAP.')
-    doc.add_paragraph('• La conversión a moneda pesada se ejecutó aplicando la tasa oficial BCV histórica obtenida vía API en tiempo real.')
+    doc.add_paragraph('• La conversión a moneda pesada se ejecutó aplicando la tasa oficial BCV correspondiente a la fecha exacta de cada transacción.')
 
     buffer = io.BytesIO()
     doc.save(buffer)
@@ -93,7 +93,7 @@ def generar_documento_word(total_b, conciliados_b, porcentaje, anulados_l, total
 
 # --- INTERFAZ PRINCIPAL STREAMLIT ---
 st.title("🏦 Agente IA de Conciliación y Análisis Financiero")
-st.write("Laboratorios Quimio-Vet, C.A. - Conciliación Avanzada, Contrapartidas y Tasas BCV Automatizadas")
+st.write("Laboratorios Quimio-Vet, C.A. - Conciliación Avanzada, Contrapartidas y Tasas BCV Diarias")
 
 # --- BARRA LATERAL: Configuración ---
 st.sidebar.header("⚙️ Configuración del Motor & Divisas")
@@ -102,7 +102,7 @@ tolerancia_monto = st.sidebar.number_input("Tolerancia en monto", min_value=0.0,
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("💱 Tasa BCV por Defecto (Fallback)")
-tasa_fallback = st.sidebar.number_input("Tasa de respaldo si falla API/Archivo", min_value=1.0, value=36.5, step=0.1)
+tasa_fallback = st.sidebar.number_input("Tasa si falta fecha en archivo", min_value=1.0, value=36.5, step=0.1)
 
 # --- CARGA DE ARCHIVOS ---
 col_up1, col_up2, col_up3 = st.columns(3)
@@ -111,7 +111,7 @@ with col_up1:
 with col_up2:
     archivo_libro = st.file_uploader("2. Mayor Analítico SAP (.xlsx)", type=["xlsx", "csv"])
 with col_up3:
-    archivo_tasas = st.file_uploader("3. Tasas BCV Opcional (Excel/CSV)", type=["xlsx", "csv"])
+    archivo_tasas = st.file_uploader("3. Tasas BCV Diarias (.xlsx, .csv)", type=["xlsx", "csv"])
 
 # --- PROCESAMIENTO Y CONCILIACIÓN ---
 if archivo_banco and archivo_libro:
@@ -119,28 +119,37 @@ if archivo_banco and archivo_libro:
         df_banco = pd.read_excel(archivo_banco, sheet_name=0, header=5)
         df_libro = pd.read_excel(archivo_libro, sheet_name=0, header=0)
         
-        # 1. CARGA INTELIGENTE: Intenta API primero, complementa o sobrescribe con Excel si el usuario lo sube
-        tasa_dict = obtener_tasas_bcv_api()
-        if tasa_dict:
-            st.sidebar.success(f"🌐 Sincronizado con API BCV: {len(tasa_dict)} días históricos.")
+        # Diccionario de tasas
+        tasa_dict = {}
+        
+        # 1. Intentar API primero
+        api_data = obtener_tasas_bcv_api()
+        if api_data:
+            tasa_dict.update(api_data)
+            st.sidebar.success(f"🌐 API BCV Conectada: {len(api_data)} días.")
         else:
-            st.sidebar.warning("⚠️ Sin conexión a API. Usando respaldo local.")
+            st.sidebar.info("ℹ️ API BCV no disponible en este momento.")
 
+        # 2. Si se subió archivo local, tiene prioridad o complementa
         if archivo_tasas:
             try:
                 df_tasas = pd.read_excel(archivo_tasas, sheet_name=0) if archivo_tasas.name.endswith('xlsx') else pd.read_csv(archivo_tasas)
                 if len(df_tasas) > 0 and len(df_tasas.columns) >= 2:
                     df_tasas.columns = [str(c).strip() for c in df_tasas.columns]
+                    
                     c_fecha_t = next((c for c in df_tasas.columns if 'fecha' in c.lower() or 'dia' in c.lower()), df_tasas.columns[0])
                     c_tasa_t = next((c for c in df_tasas.columns if 'tasa' in c.lower() or 'cambio' in c.lower() or 'valor' in c.lower() or '$' in c.lower() or 'bcv' in c.lower()), df_tasas.columns[1])
                     
                     fechas_dt_t = pd.to_datetime(df_tasas[c_fecha_t].astype(str).str.strip(), errors='coerce', dayfirst=True)
+                    if fechas_dt_t.isna().sum() > len(df_tasas) * 0.5:
+                        fechas_dt_t = pd.to_datetime(df_tasas[c_fecha_t].astype(str).str.strip(), errors='coerce')
+                    
                     df_tasas['Fecha_Str'] = fechas_dt_t.dt.strftime('%Y-%m-%d')
                     df_tasas['Tasa_Num'] = pd.to_numeric(df_tasas[c_tasa_t].astype(str).str.replace(',', '.').str.strip(), errors='coerce')
                     
-                    for _, r in df_tasas.dropna(subset=['Fecha_Str', 'Tasa_Num']).iterrows():
-                        tasa_dict[r['Fecha_Str']] = r['Tasa_Num']
-                st.success("📁 Tasas complementadas/actualizadas desde el archivo adjunto.")
+                    local_dict = dict(zip(df_tasas['Fecha_Str'], df_tasas['Tasa_Num']))
+                    tasa_dict.update(local_dict) # El archivo local sobrescribe o complementa a la API
+                    st.success(f"📁 Archivo Local de Tasas Cargado: {len(local_dict)} días registrados y aplicados.")
             except Exception as e:
                 st.sidebar.warning(f"Error leyendo archivo local de tasas: {e}")
 
@@ -152,8 +161,8 @@ if archivo_banco and archivo_libro:
 
         st.success("¡Archivos cargados y leídos correctamente!")
 
-        if st.button("🚀 Ejecutar Conciliación y Conversión BCV en Vivo"):
-            with st.spinner("Procesando cruce masivo, contrapartidas y tasas BCV dinámicas..."):
+        if st.button("🚀 Ejecutar Conciliación y Tasas Diarias"):
+            with st.spinner("Procesando cruce masivo, contrapartidas y tasas BCV diarias..."):
                 banco = df_banco.copy()
                 libro = df_libro.copy()
                 
@@ -193,7 +202,7 @@ if archivo_banco and archivo_libro:
                 banco['Estatus'] = 'Pendiente Banco'
                 banco['Libro_Match_Idx'] = None
 
-                # Asignación automática de tasa BCV diaria por fecha exacta
+                # Asignación de tasa BCV usando las cadenas YYYY-MM-DD exactas
                 tasas_aplicadas = []
                 montos_usd = []
                 for _, row in banco.iterrows():
