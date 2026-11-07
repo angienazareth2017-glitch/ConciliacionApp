@@ -1,8 +1,14 @@
 import streamlit as st
 import pandas as pd
 import io
-from docx import Document
-from docx.shared import Inches, Pt, RGBColor
+
+# Intento seguro de importar docx para evitar caídas si no está instalado
+try:
+    from docx import Document
+    from docx.shared import Inches, Pt, RGBColor
+    HAS_DOCX = True
+except ImportError:
+    HAS_DOCX = False
 
 st.set_page_config(page_title="Agente IA de Conciliación y Análisis - Quimio-Vet", layout="wide")
 
@@ -16,14 +22,14 @@ if password_ingresada != CONTRASENA_CORRECTA:
 
 # --- FUNCIÓN PARA GENERAR INFORME EN WORD (.DOCX) ---
 def generar_documento_word(total_b, conciliados_b, porcentaje, anulados_l, total_ingresos_Bs, total_egresos_Bs, total_comisiones_Bs, tasa_bcv):
+    if not HAS_DOCX:
+        return None
     doc = Document()
     
-    # Encabezado principal
     title = doc.add_heading('Informe Gerencial de Conciliación Bancaria', level=0)
     doc.add_paragraph('Laboratorios Quimio-Vet, C.A. | Departamento de Tesorería y Contabilidad')
     doc.add_paragraph(f'Tasa Referencial BCV: {tasa_bcv:,.2f} Bs/USD\n')
     
-    # 1. Resumen Ejecutivo
     doc.add_heading('1. Resumen Ejecutivo de Conciliación', level=1)
     p = doc.add_paragraph()
     p.add_run("Durante el periodo evaluado se registraron un total de ")
@@ -34,7 +40,6 @@ def generar_documento_word(total_b, conciliados_b, porcentaje, anulados_l, total
     p.add_run(f"{anulados_l} asientos de anulación/error").bold = True
     p.add_run(" en el mayor analítico de SAP con su debido reverso contable.")
 
-    # 2. Desglose de Flujos Financieros
     doc.add_heading('2. Desglose de Flujos Monetarios (Bs. y USD)', level=1)
     table = doc.add_table(rows=1, cols=3)
     table.style = 'Table Grid'
@@ -56,10 +61,9 @@ def generar_documento_word(total_b, conciliados_b, porcentaje, anulados_l, total
         row_cells[1].text = monto_bs
         row_cells[2].text = monto_usd
 
-    # 3. Observaciones y Conclusiones de Auditoría
     doc.add_heading('3. Observaciones de Auditoría', level=1)
-    doc.add_paragraph('• Las comisiones y cargos bancarios aplicados por el banco requieren causación contable según extracto.')
-    doc.add_paragraph('• Las partidas pendientes en banco responden a depósitos consolidados o transferencias por lotes registrados en SAP.')
+    doc.add_paragraph('• Las comisiones y cargos bancarios aplicados requieren causación contable según extracto.')
+    doc.add_paragraph('• Las partidas pendientes en banco responden a depósitos consolidados o transferencias por lotes en SAP.')
     doc.add_paragraph('• Se verificó el control de errores contables detectando los registros cancelados/reversados en el libro mayor.')
 
     buffer = io.BytesIO()
@@ -136,8 +140,6 @@ if archivo_banco and archivo_libro:
 
                 banco['Estatus'] = 'Pendiente Banco'
                 banco['Libro_Match_Idx'] = None
-                
-                # Conversión individual en USD según tasa BCV
                 banco['Monto_USD'] = banco['Monto_Clean'] / tasa_cambio_bcv if tasa_cambio_bcv > 0 else 0.0
 
                 col_fecha_l = next((c for c in libro.columns if 'fecha' in c.lower() and 'contabilización' in c.lower()), libro.columns[0])
@@ -151,7 +153,7 @@ if archivo_banco and archivo_libro:
                 libro['Fecha_Dt'] = pd.to_datetime(libro[col_fecha_l], errors='coerce')
                 libro['Estatus'] = 'Pendiente Libros'
 
-                # 1. Saldo Inicial y Detección Ampliada de Errores / Anulaciones
+                # 1. Saldo Inicial y Detección de Anulaciones
                 for idx_b, row_b in banco.iterrows():
                     if 'SALDO INICIAL' in str(row_b[col_desc_b]).upper():
                         banco.loc[idx_b, 'Estatus'] = 'Saldo Inicial (Banco)'
@@ -236,7 +238,7 @@ if archivo_banco and archivo_libro:
                 m4.metric("% Conciliado", f"{porcentaje:.1f}%")
                 m5.metric("Anulados / Errores", anulados_l)
 
-                # --- 🤖 IA & RESUMEN GERENCIAL EN PANTALLA ---
+                # --- 🤖 RESUMEN GERENCIAL EN PANTALLA ---
                 st.markdown("---")
                 st.subheader("🤖 Resumen e Insights Gerenciales (IA Generativa)")
 
@@ -249,11 +251,10 @@ if archivo_banco and archivo_libro:
                 * **Flujo de Entradas:** **{len(creditos_sin_comision)} créditos operativos** por **Bs. {total_ingresos_Bs:,.2f}** (**$ {total_ingresos_Bs/tasa_cambio_bcv:,.2f} USD** a tasa BCV {tasa_cambio_bcv}).
                 * **Flujo de Salidas:** **{len(debitos_sin_comision)} débitos operativos** acumulando **Bs. {total_egresos_Bs:,.2f}** (**$ {total_egresos_Bs/tasa_cambio_bcv:,.2f} USD**).
                 * **Comisiones Bancarias:** **{len(comisiones)} cargos por comisiones** sumando **Bs. {total_comisiones_Bs:,.2f}** (**$ {total_comisiones_Bs/tasa_cambio_bcv:,.2f} USD**).
-                * **Control de Errores:** Se verificaron **{anulados_l} registros con estatus de cancelación o anulación**, con su debido reverso en el mayor.
                 """
                 st.info(texto_ia)
 
-                # 4. CONSOLIDADO CON CONTRAPARTIDAS Y DIVISAS
+                # 4. CONSOLIDADO
                 consolidado_rows = []
                 for idx_b, row_b in banco.iterrows():
                     fila_cons = {
@@ -296,12 +297,12 @@ if archivo_banco and archivo_libro:
                 st.subheader("📊 Vista Previa: Consolidado (Con Contrapartidas y Divisas)")
                 st.dataframe(df_consolidado.head(10))
 
-                # --- PANEL DE DESCARGAS (EXCEL 4 HOJAS & WORD) ---
+                # --- PANEL DE DESCARGAS ---
                 st.markdown("---")
                 st.subheader("📥 Exportar Resultados y Reportes")
                 col_dl1, col_dl2 = st.columns(2)
 
-                # Exportar Excel (4 Hojas)
+                # Excel de 4 Hojas
                 output_excel = io.BytesIO()
                 with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
                     df_resumen_ia = pd.DataFrame([
@@ -334,20 +335,21 @@ if archivo_banco and archivo_libro:
                         use_container_width=True
                     )
 
-                # Exportar Word (.docx)
-                doc_word_buffer = generar_documento_word(
-                    total_b, conciliados_b, porcentaje, anulados_l,
-                    total_ingresos_Bs, total_egresos_Bs, total_comisiones_Bs, tasa_cambio_bcv
-                )
-
                 with col_dl2:
-                    st.download_button(
-                        label="📄 Descargar Informe Gerencial en Word (.docx)",
-                        data=doc_word_buffer,
-                        file_name="Informe_Gerencial_Conciliacion_QuimioVet.docx",
-                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        use_container_width=True
-                    )
+                    if HAS_DOCX:
+                        doc_word_buffer = generar_documento_word(
+                            total_b, conciliados_b, porcentaje, anulados_l,
+                            total_ingresos_Bs, total_egresos_Bs, total_comisiones_Bs, tasa_cambio_bcv
+                        )
+                        st.download_button(
+                            label="📄 Descargar Informe Gerencial en Word (.docx)",
+                            data=doc_word_buffer,
+                            file_name="Informe_Gerencial_Conciliacion_QuimioVet.docx",
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            use_container_width=True
+                        )
+                    else:
+                        st.info("💡 Para habilitar la descarga en Word, agrega 'python-docx' a tu requirements.txt. El reporte en Excel de 4 hojas funciona completo.")
 
     except Exception as e:
         st.error(f"Error procesando los archivos: {e}")
