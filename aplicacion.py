@@ -349,7 +349,7 @@ if archivo_banco and archivo_libro:
                             'Cuenta_Contrapartida': r_libro.get('Cuenta de contrapartida'),
                             'Nombre_Cuenta_Contrapartida': r_libro.get('Nombre de la cuenta de contrapartida'),
                             'Libro_Cargo_Egreso': r_libro.get('Cargo (ML)'),
-                            'Libro_Abono_Ingreso': r_logit := r_libro.get('Abono (ML)')
+                            'Libro_Abono_Ingreso': r_libro.get('Abono (ML)')
                         })
                     else:
                         fila_cons.update({
