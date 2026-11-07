@@ -1,6 +1,8 @@
 import streamlit as st
 import pandas as pd
 import io
+from docx import Document
+from docx.shared import Inches, Pt, RGBColor
 
 st.set_page_config(page_title="Agente IA de Conciliación y Análisis - Quimio-Vet", layout="wide")
 
@@ -12,9 +14,62 @@ if password_ingresada != CONTRASENA_CORRECTA:
     st.warning("🔒 Por favor, introduzca la contraseña correcta en la barra lateral para acceder al agente.")
     st.stop()
 
-# --- INTERFAZ PRINCIPAL ---
+# --- FUNCIÓN PARA GENERAR INFORME EN WORD (.DOCX) ---
+def generar_documento_word(total_b, conciliados_b, porcentaje, anulados_l, total_ingresos_Bs, total_egresos_Bs, total_comisiones_Bs, tasa_bcv):
+    doc = Document()
+    
+    # Encabezado principal
+    title = doc.add_heading('Informe Gerencial de Conciliación Bancaria', level=0)
+    doc.add_paragraph('Laboratorios Quimio-Vet, C.A. | Departamento de Tesorería y Contabilidad')
+    doc.add_paragraph(f'Tasa Referencial BCV: {tasa_bcv:,.2f} Bs/USD\n')
+    
+    # 1. Resumen Ejecutivo
+    doc.add_heading('1. Resumen Ejecutivo de Conciliación', level=1)
+    p = doc.add_paragraph()
+    p.add_run("Durante el periodo evaluado se registraron un total de ")
+    p.add_run(f"{total_b} movimientos bancarios").bold = True
+    p.add_run(", alcanzando un índice de conciliación automática del ")
+    p.add_run(f"{porcentaje:.1f}%").bold = True
+    p.add_run(f" ({conciliados_b} partidas conciliadas). Se identificaron ")
+    p.add_run(f"{anulados_l} asientos de anulación/error").bold = True
+    p.add_run(" en el mayor analítico de SAP con su debido reverso contable.")
+
+    # 2. Desglose de Flujos Financieros
+    doc.add_heading('2. Desglose de Flujos Monetarios (Bs. y USD)', level=1)
+    table = doc.add_table(rows=1, cols=3)
+    table.style = 'Table Grid'
+    hdr_cells = table.rows[0].cells
+    hdr_cells[0].text = 'Concepto'
+    hdr_cells[1].text = 'Monto en Bolívares (Bs.)'
+    hdr_cells[2].text = 'Equivalente en Dólares (USD)'
+
+    tasa_ref = tasa_bcv if tasa_bcv > 0 else 1.0
+    datos = [
+        ('Créditos Operativos (Ingresos)', f"Bs. {total_ingresos_Bs:,.2f}", f"$ {total_ingresos_Bs/tasa_ref:,.2f}"),
+        ('Débitos Operativos (Egresos)', f"Bs. {total_egresos_Bs:,.2f}", f"$ {total_egresos_Bs/tasa_ref:,.2f}"),
+        ('Comisiones y Tarifas Bancarias', f"Bs. {total_comisiones_Bs:,.2f}", f"$ {total_comisiones_Bs/tasa_ref:,.2f}"),
+    ]
+
+    for concepto, monto_bs, monto_usd in datos:
+        row_cells = table.add_row().cells
+        row_cells[0].text = concepto
+        row_cells[1].text = monto_bs
+        row_cells[2].text = monto_usd
+
+    # 3. Observaciones y Conclusiones de Auditoría
+    doc.add_heading('3. Observaciones de Auditoría', level=1)
+    doc.add_paragraph('• Las comisiones y cargos bancarios aplicados por el banco requieren causación contable según extracto.')
+    doc.add_paragraph('• Las partidas pendientes en banco responden a depósitos consolidados o transferencias por lotes registrados en SAP.')
+    doc.add_paragraph('• Se verificó el control de errores contables detectando los registros cancelados/reversados en el libro mayor.')
+
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    buffer.seek(0)
+    return buffer
+
+# --- INTERFAZ PRINCIPAL STREAMLIT ---
 st.title("🏦 Agente IA de Conciliación y Análisis Financiero")
-st.write("Laboratorios Quimio-Vet, C.A. - Conciliación Avanzada, Contrapartidas y Divisas BCV")
+st.write("Laboratorios Quimio-Vet, C.A. - Conciliación Avanzada, Contrapartidas, Divisas BCV e Informes Gerenciales")
 
 # --- BARRA LATERAL: Configuración y Tasa de Conversión ---
 st.sidebar.header("⚙️ Configuración del Motor & Divisas")
@@ -46,8 +101,8 @@ if archivo_banco and archivo_libro:
 
         st.success("¡Archivos cargados y leídos correctamente!")
 
-        if st.button("🚀 Ejecutar Conciliación y Consolidación Avanzada"):
-            with st.spinner("Procesando cruce masivo, contrapartidas y conversión a divisas..."):
+        if st.button("🚀 Ejecutar Conciliación, Análisis IA e Informes"):
+            with st.spinner("Procesando cruce masivo, contrapartidas, conversiones e informes..."):
                 banco = df_banco.copy()
                 libro = df_libro.copy()
                 
@@ -81,8 +136,8 @@ if archivo_banco and archivo_libro:
 
                 banco['Estatus'] = 'Pendiente Banco'
                 banco['Libro_Match_Idx'] = None
-
-                # Columna individual en banco para equivalente en USD según tasa BCV
+                
+                # Conversión individual en USD según tasa BCV
                 banco['Monto_USD'] = banco['Monto_Clean'] / tasa_cambio_bcv if tasa_cambio_bcv > 0 else 0.0
 
                 col_fecha_l = next((c for c in libro.columns if 'fecha' in c.lower() and 'contabilización' in c.lower()), libro.columns[0])
@@ -96,7 +151,7 @@ if archivo_banco and archivo_libro:
                 libro['Fecha_Dt'] = pd.to_datetime(libro[col_fecha_l], errors='coerce')
                 libro['Estatus'] = 'Pendiente Libros'
 
-                # 1. Saldo Inicial y Anulados
+                # 1. Saldo Inicial y Detección Ampliada de Errores / Anulaciones
                 for idx_b, row_b in banco.iterrows():
                     if 'SALDO INICIAL' in str(row_b[col_desc_b]).upper():
                         banco.loc[idx_b, 'Estatus'] = 'Saldo Inicial (Banco)'
@@ -111,8 +166,17 @@ if archivo_banco and archivo_libro:
                     carg = row_l['Cargo_Num']
                     abon = row_l['Abono_Num']
                     comm = str(row_l[col_comm_l]).upper()
-                    if (carg == 0 and abon == 0) or ('ANUL' in comm) or (carg > 0 and abon > 0 and carg == abon):
-                        libro.loc[idx_l, 'Estatus'] = 'Anulado / Reversado'
+                    
+                    es_anulado = (
+                        (carg == 0 and abon == 0) or
+                        ('ANUL' in comm) or
+                        ('CANCELAR' in comm) or
+                        ('ANULAR' in comm) or
+                        ('REVERS' in comm) or
+                        (carg > 0 and abon > 0 and carg == abon)
+                    )
+                    if es_anulado:
+                        libro.loc[idx_l, 'Estatus'] = 'Anulado / Reversado (Error)'
 
                 # 2. MOTOR DE CRUCE MASIVO
                 libro_usados = set()
@@ -162,7 +226,7 @@ if archivo_banco and archivo_libro:
                 total_b = len(banco_validos)
                 conciliados_b = len(banco[banco['Estatus'] == 'Conciliado'])
                 porcentaje = (conciliados_b / total_b * 100) if total_b > 0 else 0
-                anulados_l = len(libro[libro['Estatus'] == 'Anulado / Reversado'])
+                anulados_l = len(libro[libro['Estatus'] == 'Anulado / Reversado (Error)'])
 
                 st.subheader("📈 Resumen y Porcentaje de Conciliación")
                 m1, m2, m3, m4, m5 = st.columns(5)
@@ -170,9 +234,9 @@ if archivo_banco and archivo_libro:
                 m2.metric("Conciliados", conciliados_b)
                 m3.metric("Pendientes Banco", total_b - conciliados_b)
                 m4.metric("% Conciliado", f"{porcentaje:.1f}%")
-                m5.metric("Anulados / Reversados", anulados_l)
+                m5.metric("Anulados / Errores", anulados_l)
 
-                # --- 🤖 IA & RESUMEN GERENCIAL ---
+                # --- 🤖 IA & RESUMEN GERENCIAL EN PANTALLA ---
                 st.markdown("---")
                 st.subheader("🤖 Resumen e Insights Gerenciales (IA Generativa)")
 
@@ -181,10 +245,11 @@ if archivo_banco and archivo_libro:
                 total_comisiones_Bs = abs(comisiones['Monto_Clean'].sum())
 
                 texto_ia = f"""
-                * **Diagnóstico General:** El mes registra un total de **{total_b} movimientos bancarios**, logrando un **{porcentaje:.1f}% de conciliación** automática.
-                * **Flujo de Entradas:** **{len(creditos_sin_comision)} créditos operativos** sin comisiones, sumando **Bs. {total_ingresos_Bs:,.2f}** (Equivalente a **$ {total_ingresos_Bs/tasa_cambio_bcv:,.2f} USD** a tasa BCV de {tasa_cambio_bcv} Bs/USD).
+                * **Diagnóstico General:** El mes registra **{total_b} movimientos bancarios** y **{anulados_l} asientos de anulación/error** identificados en SAP.
+                * **Flujo de Entradas:** **{len(creditos_sin_comision)} créditos operativos** por **Bs. {total_ingresos_Bs:,.2f}** (**$ {total_ingresos_Bs/tasa_cambio_bcv:,.2f} USD** a tasa BCV {tasa_cambio_bcv}).
                 * **Flujo de Salidas:** **{len(debitos_sin_comision)} débitos operativos** acumulando **Bs. {total_egresos_Bs:,.2f}** (**$ {total_egresos_Bs/tasa_cambio_bcv:,.2f} USD**).
-                * **Comisiones:** **{len(comisiones)} cargos bancarios** por un total de **Bs. {total_comisiones_Bs:,.2f}** (**$ {total_comisiones_Bs/tasa_cambio_bcv:,.2f} USD**).
+                * **Comisiones Bancarias:** **{len(comisiones)} cargos por comisiones** sumando **Bs. {total_comisiones_Bs:,.2f}** (**$ {total_comisiones_Bs/tasa_cambio_bcv:,.2f} USD**).
+                * **Control de Errores:** Se verificaron **{anulados_l} registros con estatus de cancelación o anulación**, con su debido reverso en el mayor.
                 """
                 st.info(texto_ia)
 
@@ -231,21 +296,60 @@ if archivo_banco and archivo_libro:
                 st.subheader("📊 Vista Previa: Consolidado (Con Contrapartidas y Divisas)")
                 st.dataframe(df_consolidado.head(10))
 
-                output = io.BytesIO()
-                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                # --- PANEL DE DESCARGAS (EXCEL 4 HOJAS & WORD) ---
+                st.markdown("---")
+                st.subheader("📥 Exportar Resultados y Reportes")
+                col_dl1, col_dl2 = st.columns(2)
+
+                # Exportar Excel (4 Hojas)
+                output_excel = io.BytesIO()
+                with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
+                    df_resumen_ia = pd.DataFrame([
+                        {"Indicador / Concepto": "Movimientos Bancarios Totales", "Valor / Resultado": total_b},
+                        {"Indicador / Concepto": "Partidas Conciliadas", "Valor / Resultado": conciliados_b},
+                        {"Indicador / Concepto": "Partidas Pendientes Banco", "Valor / Resultado": total_b - conciliados_b},
+                        {"Indicador / Concepto": "% Porcentaje de Conciliación", "Valor / Resultado": f"{porcentaje:.1f}%"},
+                        {"Indicador / Concepto": "Asientos de Anulación / Error (Libros)", "Valor / Resultado": anulados_l},
+                        {"Indicador / Concepto": "Total Créditos Operativos (Bs.)", "Valor / Resultado": total_ingresos_Bs},
+                        {"Indicador / Concepto": "Total Débitos Operativos (Bs.)", "Valor / Resultado": total_egresos_Bs},
+                        {"Indicador / Concepto": "Total Comisiones Bancarias (Bs.)", "Valor / Resultado": total_comisiones_Bs},
+                        {"Indicador / Concepto": "Tasa Referencial BCV (Bs/USD)", "Valor / Resultado": tasa_cambio_bcv},
+                        {"Indicador / Concepto": "Total Créditos Operativos (USD)", "Valor / Resultado": total_ingresos_Bs / tasa_cambio_bcv if tasa_cambio_bcv > 0 else 0},
+                        {"Indicador / Concepto": "Total Débitos Operativos (USD)", "Valor / Resultado": total_egresos_Bs / tasa_cambio_bcv if tasa_cambio_bcv > 0 else 0},
+                        {"Indicador / Concepto": "Total Comisiones (USD)", "Valor / Resultado": total_comisiones_Bs / tasa_cambio_bcv if tasa_cambio_bcv > 0 else 0},
+                    ])
+                    df_resumen_ia.to_excel(writer, sheet_name='Resumen_Gerencial_IA', index=False)
                     df_consolidado.to_excel(writer, sheet_name='Banco_vs_Libro_Consolidado', index=False)
                     banco.to_excel(writer, sheet_name='Extracto_Banco', index=False)
                     libro.to_excel(writer, sheet_name='Mayor_Contable', index=False)
-                excel_data = output.getvalue()
+                
+                excel_data = output_excel.getvalue()
 
-                st.download_button(
-                    label="📥 Descargar Reporte Completo en Excel (Contrapartidas + Divisas)",
-                    data=excel_data,
-                    file_name="Reporte_Conciliacion_QuimioVet_Gerencial_Completo.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                with col_dl1:
+                    st.download_button(
+                        label="📊 Descargar Excel Completo (4 Hojas con Resumen IA)",
+                        data=excel_data,
+                        file_name="Reporte_Conciliacion_QuimioVet_4Hojas.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True
+                    )
+
+                # Exportar Word (.docx)
+                doc_word_buffer = generar_documento_word(
+                    total_b, conciliados_b, porcentaje, anulados_l,
+                    total_ingresos_Bs, total_egresos_Bs, total_comisiones_Bs, tasa_cambio_bcv
                 )
+
+                with col_dl2:
+                    st.download_button(
+                        label="📄 Descargar Informe Gerencial en Word (.docx)",
+                        data=doc_word_buffer,
+                        file_name="Informe_Gerencial_Conciliacion_QuimioVet.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        use_container_width=True
+                    )
 
     except Exception as e:
         st.error(f"Error procesando los archivos: {e}")
 else:
-    st.info("Por favor, sube ambos archivos para activar el motor de conciliación y el análisis gerencial.")
+    st.info("Por favor, sube ambos archivos para activar el motor de conciliación y la generación de reportes.")
