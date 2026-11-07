@@ -98,23 +98,26 @@ if archivo_banco and archivo_libro:
         df_banco = pd.read_excel(archivo_banco, sheet_name=0, header=5)
         df_libro = pd.read_excel(archivo_libro, sheet_name=0, header=0)
         
-        # Carga robusta y corregida de tasas BCV diarias con dayfirst=True
+        # Carga ultra-robusta de tasas BCV diarias con conversión estricta a string/fecha
         tasa_dict = {}
         if archivo_tasas:
             try:
                 df_tasas = pd.read_excel(archivo_tasas, sheet_name=0) if archivo_tasas.name.endswith('xlsx') else pd.read_csv(archivo_tasas)
                 if len(df_tasas) > 0 and len(df_tasas.columns) >= 2:
                     df_tasas.columns = [str(c).strip() for c in df_tasas.columns]
-                    c_fecha_t = next((c for c in df_tasas.columns if 'fecha' in c.lower()), df_tasas.columns[0])
-                    c_tasa_t = next((c for c in df_tasas.columns if 'tasa' in c.lower() or 'cambio' in c.lower() or 'valor' in c.lower()), df_tasas.columns[1])
                     
-                    # Corrección clave: dayfirst=True para formato venezolano DD/MM/YYYY
-                    df_tasas['Fecha_Dt'] = pd.to_datetime(df_tasas[c_fecha_t], errors='coerce', dayfirst=True).dt.normalize()
+                    c_fecha_t = next((c for c in df_tasas.columns if 'fecha' in c.lower() or 'dia' in c.lower()), df_tasas.columns[0])
+                    c_tasa_t = next((c for c in df_tasas.columns if 'tasa' in c.lower() or 'cambio' in c.lower() or 'valor' in c.lower() or '$' in c.lower() or 'bcv' in c.lower()), df_tasas.columns[1])
+                    
+                    # Normalizar a string de fecha YYYY-MM-DD para evitar errores de timestamp
+                    df_tasas['Fecha_Str'] = pd.to_datetime(df_tasas[c_fecha_t], errors='coerce', dayfirst=True).dt.strftime('%Y-%m-%d')
                     df_tasas['Tasa_Num'] = pd.to_numeric(df_tasas[c_tasa_t].astype(str).str.replace(',', '.'), errors='coerce')
-                    tasa_dict = dict(zip(df_tasas['Fecha_Dt'], df_tasas['Tasa_Num']))
-                    st.success(f"¡Se cargaron exitosamente {len(tasa_dict)} tasas diarias desde el archivo!")
+                    
+                    df_tasas = df_tasas.dropna(subset=['Fecha_Str', 'Tasa_Num'])
+                    tasa_dict = dict(zip(df_tasas['Fecha_Str'], df_tasas['Tasa_Num']))
+                    st.success(f"✅ Tasas BCV cargadas exitosamente: {len(tasa_dict)} días registrados.")
             except Exception as e:
-                st.sidebar.warning(f"No se pudo leer el archivo de tasas: {e}. Se usará la tasa por defecto.")
+                st.sidebar.warning(f"Advertencia al leer tasas: {e}. Se usará la tasa por defecto.")
 
         if len(df_libro) > 0 and 'Activos' in str(df_libro.iloc[0, 0]):
             df_libro = df_libro.iloc[1:].reset_index(drop=True)
@@ -153,24 +156,24 @@ if archivo_banco and archivo_libro:
                 col_desc_b = next((c for c in banco.columns if 'descripción' in c.lower()), 'Descripción')
 
                 banco['Monto_Clean'] = pd.to_numeric(banco[col_monto_b], errors='coerce').fillna(0)
-                banco['Fecha_Dt'] = pd.to_datetime(banco[col_fecha_b], errors='coerce', dayfirst=True)
-                if banco['Fecha_Dt'].isna().sum() > len(banco) * 0.5:
-                    banco['Fecha_Dt'] = pd.to_datetime(banco[col_fecha_b], errors='coerce')
+                
+                # Conversión estricta de fecha del banco a string YYYY-MM-DD para emparejar con el diccionario de tasas
+                banco['Fecha_Str'] = pd.to_datetime(banco[col_fecha_b], errors='coerce', dayfirst=True).dt.strftime('%Y-%m-%d')
+                banco['Fecha_Dt'] = pd.to_datetime(banco[col_fecha_b], errors='coerce', dayfirst=True).dt.normalize()
 
                 banco['Estatus'] = 'Pendiente Banco'
                 banco['Libro_Match_Idx'] = None
 
-                # Asignación dinámica de tasa BCV por cada día del movimiento
+                # Asignación de tasa BCV usando las cadenas YYYY-MM-DD
                 tasas_aplicadas = []
                 montos_usd = []
                 for _, row in banco.iterrows():
-                    f_dt = row['Fecha_Dt']
+                    f_str = row['Fecha_Str']
                     monto = row['Monto_Clean']
                     tasa_dia = tasa_fallback
-                    if pd.notna(f_dt):
-                        f_norm = f_dt.normalize()
-                        if f_norm in tasa_dict:
-                            tasa_dia = tasa_dict[f_norm]
+                    
+                    if pd.notna(f_str) and f_str in tasa_dict:
+                        tasa_dia = tasa_dict[f_str]
                     
                     tasas_aplicadas.append(tasa_dia)
                     montos_usd.append(monto / tasa_dia if tasa_dia > 0 else 0.0)
@@ -186,7 +189,7 @@ if archivo_banco and archivo_libro:
                 libro['Cargo_Num'] = libro[col_cargo_l].apply(limpiar_monto_flexible)
                 libro['Abono_Num'] = libro[col_abono_l].apply(limpiar_monto_flexible)
                 libro['Monto_Abs'] = libro[['Cargo_Num', 'Abono_Num']].max(axis=1)
-                libro['Fecha_Dt'] = pd.to_datetime(libro[col_fecha_l], errors='coerce')
+                libro['Fecha_Dt'] = pd.to_datetime(libro[col_fecha_l], errors='coerce').dt.normalize()
                 libro['Estatus'] = 'Pendiente Libros'
 
                 # 1. Saldo Inicial y Detección de Anulaciones
