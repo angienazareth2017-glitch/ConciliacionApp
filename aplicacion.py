@@ -1,47 +1,3 @@
-```python
-import pandas as pd
-
-df_libro = pd.read_excel('Mayor analítico Banco Mercantil 10-2026.xlsx', sheet_name='Hoja1', header=0)
-if len(df_libro) > 0 and 'Activos' in str(df_libro.iloc[0, 0]):
-    df_libro = df_libro.iloc[1:].reset_index(drop=True)
-
-print("Libro columns available:")
-for col in df_libro.columns:
-    print(col)
-
-
-```
-
-```text
-Libro columns available:
-Fecha de contabilización
-Fecha de vencimiento
-Fecha de documento
-Nº documento
-Nº de transacción
-Cuenta asociada
-Comentarios
-Cuenta de contrapartida
-Nombre de la cuenta de contrapartida
-Cargo (ML)
-Abono (ML)
-Saldo acumulado (ML)
-Autor
-
-
-```
-
-¡Excelente requerimiento! Incorporar la **Cuenta de contrapartida** y el **Nombre de la cuenta de contrapartida** directamente en la hoja consolidada le dará a tu auditoría un nivel de detalle contable impecable. Asimismo, agregar una columna individual de **equivalente en dólares por cada monto** usando la tasa BCV del día convertirá tu reporte en un instrumento gerencial de primera línea.
-
-Aquí tienes el código completo y actualizado para tu archivo **`aplicacion.py`**, el cual incluye:
-
-1. Las columnas contables de contrapartida de SAP.
-2. La columna individual de conversión a divisas en el consolidado.
-3. El motor robusto de conciliación, clasificación de débitos, créditos y comisiones, y el resumen de IA gerencial.
-
-### Código Actualizado para `aplicacion.py`
-
-```python
 import streamlit as st
 import pandas as pd
 import io
@@ -293,5 +249,3 @@ if archivo_banco and archivo_libro:
         st.error(f"Error procesando los archivos: {e}")
 else:
     st.info("Por favor, sube ambos archivos para activar el motor de conciliación y el análisis gerencial.")
-
-```
