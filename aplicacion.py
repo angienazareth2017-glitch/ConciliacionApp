@@ -177,7 +177,7 @@ if archivo_banco and archivo_erp:
             )
 
             response = client_or.chat.completions.create(
-                model="anthropic/claude-3.5-sonnet",
+                model="anthropic/claude-3-haiku",
                 messages=[{"role": "system", "content": prompt_sistema}]
                 + st.session_state.mensajes_chat,
                 max_tokens=1000,
