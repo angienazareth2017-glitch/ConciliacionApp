@@ -176,7 +176,6 @@ if archivo_banco and archivo_erp:
                 " datos financieros proporcionados."
             )
 
-            # Usando el modelo actualizado y activo en OpenRouter
             response = client_or.chat.completions.create(
                 model="anthropic/claude-3.5-sonnet",
                 messages=[{"role": "system", "content": prompt_sistema}]
