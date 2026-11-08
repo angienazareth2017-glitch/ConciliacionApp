@@ -104,6 +104,34 @@ with st.sidebar:
   )
   moneda_base = st.selectbox("Moneda de Presentación", ["USD", "EUR"])
 
+  st.markdown("---")
+  st.header("💱 Tasas y Conversión BCV")
+  modo_tasa = st.radio(
+      "Fuente de Tasa de Cambio:",
+      ["Automática (API BCV)", "Ingreso Manual"],
+  )
+
+  tasa_manual = 1.0
+  if modo_tasa == "Ingreso Manual":
+    tasa_manual = st.number_input(
+        "Ingrese la Tasa BCV del día:", min_value=0.01, value=36.00, step=0.1
+    )
+  else:
+    fecha_consulta = st.date_input(
+        "Fecha para consultar tasa BCV:", datetime.today()
+    )
+    fecha_str = fecha_consulta.strftime("%Y-%m-%d")
+    tasa_api = obtener_tasa_bcv(fecha_str)
+    if tasa_api > 0:
+      st.success(f"Tasa BCV ({fecha_str}): Bs. {tasa_api:,.2f}")
+      tasa_manual = tasa_api
+    else:
+      st.warning(
+          "No se pudo conectar con la API para esa fecha. Ingrese tasa"
+          " manual:"
+      )
+      tasa_manual = st.number_input("Tasa de respaldo:", value=36.00, step=0.1)
+
 # Estado de la sesión para el chat con IA
 if "mensajes_chat" not in st.session_state:
   st.session_state.mensajes_chat = []
@@ -124,8 +152,7 @@ if archivo_banco and archivo_erp:
     st.error(f"Error al leer los archivos subidos: {e}")
     st.stop()
 
-  # Procesamiento de montos y detección de reversos / comisiones (Estimación estándar)
-  # Buscamos columnas comunes de montos y descripciones
+  # Procesamiento de montos y detección de columnas clave
   col_monto_banco = next(
       (
           c
@@ -146,6 +173,9 @@ if archivo_banco and archivo_erp:
   )
 
   df_banco["Monto_LimPIO"] = df_banco[col_monto_banco].apply(limpiar_monto)
+  df_banco[f"Monto_{moneda_base}"] = df_banco["Monto_LimPIO"] / (
+      tasa_manual if tasa_manual > 0 else 1
+  )
 
   # Cálculos de métricas gerenciales
   total_movimientos = len(df_banco)
@@ -157,7 +187,7 @@ if archivo_banco and archivo_erp:
   ].sum()
   total_general = df_banco["Monto_LimPIO"].sum()
 
-  # Detección de comisiones y reversos por palabras clave en descripciones
+  # Filtros de comisiones y reversos
   mask_comisiones = df_banco[col_desc_banco].astype(str).str.contains(
       "comis|comisión|com", case=False, na=False
   )
@@ -173,14 +203,17 @@ if archivo_banco and archivo_erp:
 
   # Pestañas de la aplicación
   tab1, tab2, tab3 = st.tabs(
-      ["📊 Conciliación y Métricas", "💬 Asistente IA Financiero", "📥 Exportar"
-      " Reportes"]
+      [
+          "📊 Conciliación, Métricas y Consolidado",
+          "💬 Asistente IA Financiero",
+          "📥 Exportar Reportes",
+      ]
   )
 
   with tab1:
     st.subheader("Resumen General de Movimientos y Tesorería")
 
-    # Métricas detalladas restauradas
+    # Métricas detalladas
     col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("Total Movimientos", total_movimientos)
     col2.metric("Total General", f"{total_general:,.2f}")
@@ -194,8 +227,27 @@ if archivo_banco and archivo_erp:
     st.subheader("Detalle de Comisiones Detectadas")
     st.metric("Monto Total en Comisiones", f"{abs(total_comisiones):,.2f}")
 
-    with st.expander("Ver vista previa del extracto bancario procesado"):
-      st.dataframe(df_banco.head(15))
+    st.markdown("---")
+    st.subheader(
+        "📋 Consolidado de Conciliación Procesado (Tasa Aplicada:"
+        f" {tasa_manual:,.2f})"
+    )
+    st.dataframe(df_banco, use_container_width=True)
+
+    # Botón para descargar el consolidado en Excel directamente desde la pestaña 1
+    buffer_excel = BytesIO()
+    with pd.ExcelWriter(buffer_excel, engine="openpyxl") as writer:
+      df_banco.to_excel(writer, index=False, sheet_name="Consolidado_Conciliacion")
+    buffer_excel.seek(0)
+
+    st.download_button(
+        label="⬇️ Descargar Consolidado de Conciliación en Excel (.xlsx)",
+        data=buffer_excel,
+        file_name=f"Consolidado_Conciliacion_{datetime.now().strftime('%Y%m%d')}.xlsx",
+        mime=(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+    )
 
   with tab2:
     st.subheader("💬 Asistente IA Financiero (Claude vía OpenRouter)")
@@ -229,11 +281,11 @@ if archivo_banco and archivo_erp:
       if ia_disponible and API_KEY_OR != "tu-api-key-de-openrouter-aqui":
         with st.spinner("Analizando datos contables con Claude..."):
           try:
-            # Resumen contextual automático para la IA (evita que pida formatos)
             resumen_contextual = (
-                f"DATOS FINANCIEROS ACTUALES:\n- Total Movimientos: {total_movimientos}\n"
-                f"- Total General: {total_general}\n- Total Ingresos: {total_ingresos}\n"
-                f"- Total Egresos: {total_egresos}\n- Total Comisiones: {total_comisiones}\n"
+                f"DATOS FINANCIEROS ACTUALES:\n- Tasa BCV Aplicada: {tasa_manual}\n"
+                f"- Total Movimientos: {total_movimientos}\n- Total General: {total_general}\n"
+                f"- Total Ingresos: {total_ingresos}\n- Total Egresos: {total_egresos}\n"
+                f"- Total Comisiones: {total_comisiones}\n"
                 f"- Partidas Reversadas / Anuladas: {cant_reversos} (Suma: {total_reversos})\n"
                 f"Muestra de transacciones recientes:\n{df_banco[[col_desc_banco, col_monto_banco]].head(15).to_string()}"
             )
@@ -272,8 +324,8 @@ if archivo_banco and archivo_erp:
   with tab3:
     st.subheader("📥 Generación de Informes Ejecutivos")
     st.markdown(
-        "Descarga el reporte completo en formato Word incluyendo los métricas y"
-        " los insights del asistente de IA."
+        "Descarga el reporte completo en formato Word incluyendo las métricas,"
+        " la tasa BCV aplicada y los insights del asistente de IA."
     )
 
     if st.button("📄 Generar Reporte Word"):
@@ -282,6 +334,7 @@ if archivo_banco and archivo_erp:
       doc.add_paragraph(
           f"Fecha de emisión: {datetime.now().strftime('%Y-%m-%d')}"
       )
+      doc.add_paragraph(f"Tasa BCV Aplicada: Bs. {tasa_manual:,.2f}")
 
       doc.add_heading("1. Resumen Ejecutivo y Métricas", level=1)
       doc.add_paragraph(f"• Total de Movimientos: {total_movimientos}")
