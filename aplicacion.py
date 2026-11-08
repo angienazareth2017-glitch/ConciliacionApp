@@ -16,7 +16,6 @@ st.set_page_config(
 # ---------------------------------------------------------
 # CONFIGURACIÓN DE OPENROUTER (CLIENTE DE IA)
 # ---------------------------------------------------------
-# Se recomienda guardar la API key en st.secrets["OPENROUTER_API_KEY"]
 API_KEY_OR = st.secrets.get("OPENROUTER_API_KEY", "tu-api-key-de-openrouter-aqui")
 
 try:
@@ -110,7 +109,7 @@ if "mensajes_chat" not in st.session_state:
   st.session_state.mensajes_chat = []
 
 if archivo_banco and archivo_erp:
-  # Lectura de archivos (Simulada / Estructura base)
+  # Lectura de archivos
   if archivo_banco.name.endswith(".csv"):
     df_banco = pd.read_csv(archivo_banco)
   else:
@@ -129,7 +128,6 @@ if archivo_banco and archivo_erp:
 
   with tab1:
     st.subheader("Resumen General de Movimientos")
-    # Métricas simuladas de control
     col1, col2, col3 = st.columns(3)
     col1.metric("Total Movimientos Banco", len(df_banco))
     col2.metric("Total Registros ERP", len(df_erp))
@@ -172,13 +170,13 @@ if archivo_banco and archivo_erp:
       if ia_disponible and API_KEY_OR != "tu-api-key-de-openrouter-aqui":
         with st.spinner("Analizando datos contables con Claude..."):
           try:
-            # Contexto resumido de los datos actuales
             prompt_sistema = (
                 "Eres un auditor contable experto en tesorería corporativa en"
                 " Venezuela. Ayuda a analizar la conciliación bancaria y los"
                 " datos financieros proporcionados."
             )
 
+            # Usando el modelo actualizado y activo en OpenRouter
             response = client_or.chat.completions.create(
                 model="anthropic/claude-3.5-sonnet",
                 messages=[{"role": "system", "content": prompt_sistema}]
