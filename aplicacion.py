@@ -176,8 +176,9 @@ if archivo_banco and archivo_erp:
                 " datos financieros proporcionados."
             )
 
+            # Modelo actualizado sugerido por OpenRouter
             response = client_or.chat.completions.create(
-                model="anthropic/claude-3-haiku",
+                model="anthropic/claude-haiku-4.5",
                 messages=[{"role": "system", "content": prompt_sistema}]
                 + st.session_state.mensajes_chat,
                 max_tokens=1000,
