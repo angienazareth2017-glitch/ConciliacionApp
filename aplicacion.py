@@ -52,11 +52,11 @@ if not st.session_state.autenticado:
 
 
 @st.cache_data(ttl=86400)
-def obtener_tasa_bcv(fecha_str):
-  """Consulta la tasa oficial BCV histórica para la fecha dada (formato YYYY-MM-DD)."""
+def obtener_tasa_bcv_api(fecha_str):
+  """Consulta la tasa oficial BCV histórica para la fecha dada mediante la API."""
   try:
     url = f"https://pydolarvenezuela.org/api/v1/dollar/history/{fecha_str}"
-    response = requests.get(url, timeout=5)
+    response = requests.get(url, timeout=4)
     if response.status_code == 200:
       data = response.json()
       return data.get("bcv", {}).get("price", 0.0)
@@ -65,10 +65,10 @@ def obtener_tasa_bcv(fecha_str):
   return 0.0
 
 
-def cargar_diccionario_tasas(archivo_tasas):
-  """Carga el archivo Excel de tasas y crea un diccionario de fechas para búsqueda rápida."""
+def cargar_diccionario_tasas_excel(archivo_tasas):
+  """Carga el archivo Excel de respaldo y crea un diccionario de fechas para búsqueda rápida."""
   dict_tasas = {}
-  ultima_tasa = 37.03  # Valor por defecto inicial
+  ultima_tasa = 37.03
   try:
     df_t = (
         pd.read_excel(archivo_tasas)
@@ -173,8 +173,9 @@ def limpiar_tabla_financiera(archivo):
 st.title("💼 Sistema Automatizado de Conciliación y Tesorería")
 st.markdown(
     "Cruza extractos bancarios contra mayores contables (SAP/ERP) fila por"
-    " fila para el mes completo, aplicando tasa BCV por movimiento, evaluando"
-    " Cargo y Abono, y generando reporte de 4 pestañas."
+    " fila para el mes completo, aplicando tasas BCV dinámicas (API con"
+    " respaldo Excel), evaluando Cargo y Abono, y generando reporte de 4"
+    " pestañas."
 )
 
 with st.sidebar:
@@ -190,11 +191,11 @@ with st.sidebar:
   st.markdown("---")
   st.header("💱 Tasas y Conversión BCV")
   archivo_tasas = st.file_uploader(
-      "Subir Archivo Excel de Tasas (Histórico Respaldo)", type=["xlsx", "csv"]
+      "Subir Archivo Excel de Tasas (Respaldo)", type=["xlsx", "csv"]
   )
   st.info(
-      "💡 El sistema asignará automáticamente la tasa correspondiente a la"
-      " fecha de cada movimiento utilizando la API o tu archivo de respaldo."
+      "💡 El sistema intentará consultar la API BCV por cada fecha. Si no hay"
+      " conexión, tomará la tasa del Excel de respaldo adjunto."
   )
 
 if "mensajes_chat" not in st.session_state:
@@ -212,7 +213,9 @@ if archivo_banco and archivo_erp:
   dict_tasas_respaldo = {}
   tasa_default = 37.03
   if archivo_tasas is not None:
-    dict_tasas_respaldo, tasa_default = cargar_diccionario_tasas(archivo_tasas)
+    dict_tasas_respaldo, tasa_default = cargar_diccionario_tasas_excel(
+        archivo_tasas
+    )
 
   # Detección de columnas de Fecha y Monto en Banco
   col_fecha_banco = next(
@@ -291,42 +294,38 @@ if archivo_banco and archivo_erp:
   )
 
 
-  # Función para obtener tasa por fecha de movimiento
-  def obtener_tasa_por_movimiento(fecha_val):
+  # Función Dual Automática: API BCV con respaldo de Excel
+  def obtener_tasa_dual(fecha_val):
     f_dt = pd.to_datetime(fecha_val, errors="coerce")
     if pd.isna(f_dt):
       return tasa_default
     f_str = f_dt.strftime("%Y-%m-%d")
 
-    # 1. Buscar en diccionario de respaldo del Excel
-    if f_str in dict_tasas_respaldo:
-      return dict_tasas_respaldo[f_str]
-
-    # 2. Consultar API si hay conexión
-    t_api = obtener_tasa_bcv(f_str)
+    # 1. Intentar API BCV en línea
+    t_api = obtener_tasa_bcv_api(f_str)
     if t_api > 0:
       return t_api
 
-    # 3. Fallback al último valor conocido
+    # 2. Si falla la API, buscar en el Excel de respaldo
+    if f_str in dict_tasas_respaldo:
+      return dict_tasas_respaldo[f_str]
+
+    # 3. Fallback final si no está en ninguno de los dos
     return tasa_default
 
 
   # Asignación de tasa y conversión fila por fila según la fecha del movimiento
-  tasas_banco = []
-  for f in df_banco[col_fecha_banco]:
-    tasas_banco.append(obtener_tasa_por_movimiento(f))
-
+  tasas_banco = [obtener_tasa_dual(f) for f in df_banco[col_fecha_banco]]
   df_banco["Tasa_BCV"] = tasas_banco
   df_banco[f"Monto_{moneda_base}"] = (
       df_banco["Monto_Clean"] / df_banco["Tasa_BCV"]
   ).round(2)
 
-  # Para el ERP replicamos la asignación de tasa según su fecha si la tiene
   col_fecha_erp = next(
       (c for c in df_erp.columns if "fecha" in str(c).lower()), None
   )
   if col_fecha_erp:
-    tasas_erp = [obtener_tasa_por_movimiento(f) for f in df_erp[col_fecha_erp]]
+    tasas_erp = [obtener_tasa_dual(f) for f in df_erp[col_fecha_erp]]
     df_erp["Tasa_BCV"] = tasas_erp
   else:
     df_erp["Tasa_BCV"] = tasas_banco[0] if len(tasas_banco) > 0 else tasa_default
@@ -429,12 +428,12 @@ if archivo_banco and archivo_erp:
 
     st.markdown("---")
     st.subheader(
-        "📋 Consolidado de Conciliación Bancaria (Mes Completo - Tasas Dinámicas"
-        " por Fecha)"
+        "📋 Consolidado de Conciliación Bancaria (Mes Completo - Tasas API /"
+        " Respaldo Excel)"
     )
     st.markdown(
-        "Detalle side-by-side: Extracto Bancario, Tasa del Día, Conversión en"
-        " Divisas y Mayor Analítico ERP."
+        "Detalle side-by-side: Extracto Bancario, Tasa BCV Automática, Conversión"
+        " en Divisas y Mayor Analítico ERP."
     )
 
     st.dataframe(df_consolidado, use_container_width=True)
