@@ -66,15 +66,13 @@ def obtener_tasa_bcv(fecha_str):
 
 
 def obtener_tasa_bcv_desde_excel(archivo_tasas, fecha_buscada_str):
-  """Busca de forma robusta la tasa en el Excel de respaldo para la fecha exacta (YYYY-MM-DD)."""
+  """Busca la tasa en el Excel de respaldo para la fecha exacta (YYYY-MM-DD)."""
   try:
     df_t = (
         pd.read_excel(archivo_tasas)
         if not archivo_tasas.name.endswith(".csv")
         else pd.read_csv(archivo_tasas)
     )
-
-    # Identificar columna de fecha y de tasa de forma inteligente
     col_f = next(
         (c for c in df_t.columns if "fecha" in str(c).lower()), df_t.columns[0]
     )
@@ -90,7 +88,6 @@ def obtener_tasa_bcv_desde_excel(archivo_tasas, fecha_buscada_str):
         df_t.columns[1],
     )
 
-    # Convertir a formato de fecha estándar YYYY-MM-DD
     df_t["Fecha_Filtro"] = pd.to_datetime(
         df_t[col_f], errors="coerce"
     ).dt.strftime("%Y-%m-%d")
@@ -190,31 +187,26 @@ with st.sidebar:
 
   st.markdown("---")
   st.header("💱 Tasas y Conversión BCV")
-  modo_tasa = st.radio(
-      "Fuente de Tasa de Cambio:",
-      ["Automática (API BCV)", "Ingreso Manual"],
-  )
 
-  tasa_aplicada = 36.00
   archivo_tasas = st.file_uploader(
-      "Subir Histórico de Tasas (Excel de Respaldo)", type=["xlsx", "csv"]
+      "Subir Archivo Excel de Tasas (Respaldo)", type=["xlsx", "csv"]
   )
-
   fecha_consulta = st.date_input(
       "Fecha para consultar tasa BCV:", datetime.today()
   )
   fecha_str = fecha_consulta.strftime("%Y-%m-%d")
 
-  tasa_api = 0.0
-  if modo_tasa == "Automática (API BCV)":
-    with st.spinner("Consultando API BCV..."):
-      tasa_api = obtener_tasa_bcv(fecha_str)
+  tasa_aplicada = 0.0
+
+  # 1. Intentar API Automática
+  with st.spinner("Consultando API BCV..."):
+    tasa_api = obtener_tasa_bcv(fecha_str)
 
   if tasa_api > 0:
     st.success(f"Tasa BCV vía API ({fecha_str}): Bs. {tasa_api:,.2f}")
     tasa_aplicada = tasa_api
   else:
-    tasa_encontrada = False
+    # 2. Si falla la API, buscar obligatoriamente en el Excel de respaldo
     if archivo_tasas is not None:
       tasa_excel, encontrada = obtener_tasa_bcv_desde_excel(
           archivo_tasas, fecha_str
@@ -225,16 +217,17 @@ with st.sidebar:
             f" {tasa_excel:,.2f}"
         )
         tasa_aplicada = tasa_excel
-        tasa_encontrada = True
       else:
-        st.warning(
-            f"⚠️ Fecha {fecha_str} no hallada en el Excel de respaldo."
+        st.error(
+            f"❌ API sin conexión y la fecha {fecha_str} no fue hallada en el"
+            " archivo Excel de tasas."
         )
-
-    if not tasa_encontrada:
-      tasa_aplicada = st.number_input(
-          "Tasa de respaldo / manual:", min_value=0.01, value=37.03, step=0.01
+    else:
+      st.error(
+          "❌ API sin conexión. Por favor adjunte el archivo Excel de tasas de"
+          " respaldo."
       )
+      tasa_aplicada = 1.0
 
 if "mensajes_chat" not in st.session_state:
   st.session_state.mensajes_chat = []
