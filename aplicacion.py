@@ -65,6 +65,44 @@ def obtener_tasa_bcv(fecha_str):
   return 0.0
 
 
+def obtener_tasa_bcv_desde_excel(archivo_tasas, fecha_buscada_str):
+  """Busca de forma robusta la tasa en el Excel de respaldo para la fecha exacta (YYYY-MM-DD)."""
+  try:
+    df_t = (
+        pd.read_excel(archivo_tasas)
+        if not archivo_tasas.name.endswith(".csv")
+        else pd.read_csv(archivo_tasas)
+    )
+
+    # Identificar columna de fecha y de tasa de forma inteligente
+    col_f = next(
+        (c for c in df_t.columns if "fecha" in str(c).lower()), df_t.columns[0]
+    )
+    col_v = next(
+        (
+            c
+            for c in df_t.columns
+            if any(
+                k in str(c).lower()
+                for k in ["tasa", "precio", "bcv", "valor", "cambio"]
+            )
+        ),
+        df_t.columns[1],
+    )
+
+    # Convertir a formato de fecha estándar YYYY-MM-DD
+    df_t["Fecha_Filtro"] = pd.to_datetime(
+        df_t[col_f], errors="coerce"
+    ).dt.strftime("%Y-%m-%d")
+    match = df_t[df_t["Fecha_Filtro"] == fecha_buscada_str]
+
+    if not match.empty:
+      return float(match.iloc[0][col_v]), True
+  except Exception:
+    pass
+  return 0.0, False
+
+
 def limpiar_monto(val):
   if pd.isna(val):
     return 0.0
@@ -178,49 +216,20 @@ with st.sidebar:
   else:
     tasa_encontrada = False
     if archivo_tasas is not None:
-      try:
-        df_t = (
-            pd.read_excel(archivo_tasas)
-            if not archivo_tasas.name.endswith(".csv")
-            else pd.read_csv(archivo_tasas)
+      tasa_excel, encontrada = obtener_tasa_bcv_desde_excel(
+          archivo_tasas, fecha_str
+      )
+      if encontrada:
+        st.success(
+            f"Tasa obtenida del Excel de Respaldo ({fecha_str}): Bs."
+            f" {tasa_excel:,.2f}"
         )
-        col_f = next(
-            (c for c in df_t.columns if "fecha" in str(c).lower()),
-            df_t.columns[0],
+        tasa_aplicada = tasa_excel
+        tasa_encontrada = True
+      else:
+        st.warning(
+            f"⚠️ Fecha {fecha_str} no hallada en el Excel de respaldo."
         )
-        col_v = next(
-            (
-                c
-                for c in df_t.columns
-                if any(
-                    k in str(c).lower()
-                    for k in ["tasa", "precio", "bcv", "valor", "cambio"]
-                )
-            ),
-            df_t.columns[1],
-        )
-
-        df_t["Fecha_Filtro"] = pd.to_datetime(
-            df_t[col_f], errors="coerce"
-        ).dt.strftime("%Y-%m-%d")
-        match = df_t[df_t["Fecha_Filtro"] == fecha_str]
-
-        if not match.empty:
-          tasa_aplicada = float(match.iloc[0][col_v])
-          st.success(
-              f"Tasa exacta del respaldo ({fecha_str}): Bs."
-              f" {tasa_aplicada:,.2f}"
-          )
-          tasa_encontrada = True
-        else:
-          tasa_aplicada = float(df_t.iloc[-1][col_v])
-          st.success(
-              f"Tasa tomada del registro final del respaldo: Bs."
-              f" {tasa_aplicada:,.2f}"
-          )
-          tasa_encontrada = True
-      except Exception as e:
-        pass
 
     if not tasa_encontrada:
       tasa_aplicada = st.number_input(
@@ -293,7 +302,6 @@ if archivo_banco and archivo_erp:
         - df_erp[col_abono_erp].apply(limpiar_monto)
     ).round(2)
   else:
-    # Si no están separadas, busca una columna general de monto
     col_monto_erp = next(
         (
             c
@@ -322,7 +330,7 @@ if archivo_banco and archivo_erp:
       df_erp["Monto_Clean"] / df_erp["Tasa_BCV"]
   ).round(2)
 
-  # MOTOR DE CONCILIACIÓN FILA POR FILA (Cruce exacto Bancos vs ERP considerando Cargo/Abono)
+  # MOTOR DE CONCILIACIÓN FILA POR FILA
   erp_usados = set()
   estatus_banco_lista = []
   match_erp_indices = []
