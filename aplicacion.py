@@ -96,7 +96,10 @@ def detectar_y_limpiar_tabla(archivo):
   for idx, row in df_raw.iterrows():
     row_str = " ".join([str(val) for val in row.values]).lower()
     if "fecha" in row_str and (
-        "monto" in row_str or "importe" in row_str or "debito" in row_str
+        "monto" in row_str
+        or "importe" in row_str
+        or "debito" in row_str
+        or "saldo" in row_str
     ):
       header_row = idx
       break
@@ -192,11 +195,6 @@ with st.sidebar:
               f" {tasa_aplicada:,.2f}"
           )
           tasa_encontrada = True
-        else:
-          st.warning(
-              f"⚠️ Fecha {fecha_str} no hallada exactamente en el Excel."
-              " Usando tasa manual:"
-          )
       except Exception as e:
         pass
 
@@ -217,13 +215,14 @@ if archivo_banco and archivo_erp:
     st.error(f"Error al leer y limpiar los archivos subidos: {e}")
     st.stop()
 
-  # Detección de columnas clave en Banco
+  # Detección inteligente de columnas de Monto en Banco y ERP
   col_monto_banco = next(
       (
           c
           for c in df_banco.columns
           if any(
-              k in str(c).lower() for k in ["monto", "importe", "debito", "credito"]
+              k in str(c).lower()
+              for k in ["monto", "importe", "debito", "credito", "valor"]
           )
       ),
       df_banco.columns[-1],
@@ -240,27 +239,19 @@ if archivo_banco and archivo_erp:
       df_banco.columns[0],
   )
 
-  # Detección de columnas clave en ERP
   col_monto_erp = next(
       (
           c
           for c in df_erp.columns
           if any(
-              k in str(c).lower() for k in ["monto", "importe", "debito", "credito"]
+              k in str(c).lower()
+              for k in ["monto", "importe", "debito", "credito", "valor"]
           )
       ),
       df_erp.columns[-1],
   )
-  col_ref_erp = next(
-      (
-          c
-          for c in df_erp.columns
-          if any(k in str(c).lower() for k in ["referencia", "doc", "documento"])
-      ),
-      df_erp.columns[0],
-  )
 
-  # Limpieza de montos y redondeo a 2 decimales
+  # Limpieza y redondeo estricto de montos para asegurar el cruce
   df_banco["Monto_Clean"] = (
       df_banco[col_monto_banco].apply(limpiar_monto).round(2)
   )
@@ -268,7 +259,7 @@ if archivo_banco and archivo_erp:
       df_erp[col_monto_erp].apply(limpiar_monto).round(2)
   )
 
-  # MOTOR DE CONCILIACIÓN FILA POR FILA (BANCO Y ERP)
+  # MOTOR DE CONCILIACIÓN FILA POR FILA (CRUCE EXACTO)
   montos_erp_set = set(df_erp["Monto_Clean"].values)
   montos_banco_set = set(df_banco["Monto_Clean"].values)
 
@@ -415,8 +406,8 @@ if archivo_banco and archivo_erp:
 
     if not ia_disponible or API_KEY_OR == "tu-api-key-de-openrouter-aqui":
       st.warning(
-          "⚠️ Configura তোমার `OPENROUTER_API_KEY` en los secretos de"
-          " Streamlit para activar el chat inteligente."
+          "⚠️ Configura tu `OPENROUTER_API_KEY` en los secretos de Streamlit"
+          " para activar el chat inteligente."
       )
 
     for msg in st.session_state.mensajes_chat:
@@ -436,12 +427,10 @@ if archivo_banco and archivo_erp:
         with st.spinner("Analizando conciliación con Claude..."):
           try:
             resumen_contextual = (
-                f"DATOS DE CONCILIACIÓN BANCARIA:\n- Tasa BCV Aplicada:"
-                f" {tasa_aplicada}\n- Total Movimientos: {total_movimientos}\n-"
-                f" Conciliados: {cant_conciliados}\n- Pendientes por conciliar:"
-                f" {cant_pendientes}\n- Partidas Reversadas:"
-                f" {cant_reversos}\n- Total Comisiones: {total_comisiones}\n\nDetalle"
-                f" de filas:\n{df_banco[[col_desc_banco, col_monto_banco, 'Estatus_Conciliacion']].head(20).to_string()}"
+                f"DATOS DE CONCILIACIÓN BANCARIA:\n- Tasa BCV Aplicada: {tasa_aplicada}\n"
+                f"- Total Movimientos: {total_movimientos}\n- Conciliados: {cant_conciliados}\n"
+                f"- Pendientes por conciliar: {cant_pendientes}\n- Partidas Reversadas: {cant_reversos}\n"
+                f"- Total Comisiones: {total_comisiones}\n\nDetalle de filas:\n{df_banco[[col_desc_banco, col_monto_banco, 'Estatus_Conciliacion']].head(20).to_string()}"
             )
 
             prompt_sistema = (
