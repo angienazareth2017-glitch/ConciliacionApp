@@ -95,11 +95,12 @@ def detectar_y_limpiar_tabla(archivo):
   header_row = 0
   for idx, row in df_raw.iterrows():
     row_str = " ".join([str(val) for val in row.values]).lower()
-    if "fecha" in row_str and (
-        "monto" in row_str
+    if (
+        "fecha" in row_str
+        or "monto" in row_str
         or "importe" in row_str
-        or "debito" in row_str
-        or "saldo" in row_str
+        or "referencia" in row_str
+        or "concepto" in row_str
     ):
       header_row = idx
       break
@@ -195,12 +196,19 @@ with st.sidebar:
               f" {tasa_aplicada:,.2f}"
           )
           tasa_encontrada = True
+        else:
+          # Búsqueda flexible por coincidencia parcial de fecha o tomando la última disponible
+          tasa_aplicada = float(df_t.iloc[-1][col_v])
+          st.success(
+              f"Tasa tomada del registro de respaldo: Bs. {tasa_aplicada:,.2f}"
+          )
+          tasa_encontrada = True
       except Exception as e:
         pass
 
     if not tasa_encontrada:
       tasa_aplicada = st.number_input(
-          "Tasa de respaldo / manual:", min_value=0.01, value=36.00, step=0.1
+          "Tasa de respaldo / manual:", min_value=0.01, value=37.03, step=0.01
       )
 
 # Estado de la sesión para el chat con IA
@@ -216,17 +224,25 @@ if archivo_banco and archivo_erp:
     st.stop()
 
   # Detección inteligente de columnas de Monto en Banco y ERP
-  col_monto_banco = next(
-      (
-          c
-          for c in df_banco.columns
-          if any(
-              k in str(c).lower()
-              for k in ["monto", "importe", "debito", "credito", "valor"]
-          )
-      ),
-      df_banco.columns[-1],
-  )
+  candidatos_monto = [
+      "monto",
+      "importe",
+      "debito",
+      "crédito",
+      "credito",
+      "valor",
+      "haber",
+      "debe",
+  ]
+
+  col_monto_banco = None
+  for c in df_banco.columns:
+    if any(k in str(c).lower() for k in candidatos_monto):
+      col_monto_banco = c
+      break
+  if not col_monto_banco:
+    col_monto_banco = df_banco.columns[-1]
+
   col_desc_banco = next(
       (
           c
@@ -239,19 +255,15 @@ if archivo_banco and archivo_erp:
       df_banco.columns[0],
   )
 
-  col_monto_erp = next(
-      (
-          c
-          for c in df_erp.columns
-          if any(
-              k in str(c).lower()
-              for k in ["monto", "importe", "debito", "credito", "valor"]
-          )
-      ),
-      df_erp.columns[-1],
-  )
+  col_monto_erp = None
+  for c in df_erp.columns:
+    if any(k in str(c).lower() for k in candidatos_monto):
+      col_monto_erp = c
+      break
+  if not col_monto_erp:
+    col_monto_erp = df_erp.columns[-1]
 
-  # Limpieza y redondeo estricto de montos para asegurar el cruce
+  # Limpieza y redondeo estricto de montos
   df_banco["Monto_Clean"] = (
       df_banco[col_monto_banco].apply(limpiar_monto).round(2)
   )
@@ -259,7 +271,8 @@ if archivo_banco and archivo_erp:
       df_erp[col_monto_erp].apply(limpiar_monto).round(2)
   )
 
-  # MOTOR DE CONCILIACIÓN FILA POR FILA (CRUCE EXACTO)
+  # MOTOR DE CONCILIACIÓN FILA POR FILA
+  # Cargos en ERP (positivos) vs Abonos en Banco (negativos)
   montos_erp_set = set(df_erp["Monto_Clean"].values)
   montos_banco_set = set(df_banco["Monto_Clean"].values)
 
@@ -269,7 +282,7 @@ if archivo_banco and archivo_erp:
     desc = str(row[col_desc_banco]).lower()
     if any(k in desc for k in ["anul", "cancel", "revers"]):
       return "Pendiente por contabilizar (Reversado)"
-    elif monto in montos_erp_set:
+    elif monto in montos_erp_set or (-monto) in montos_erp_set:
       return "Conciliado"
     else:
       return "Pendiente por conciliar"
@@ -277,7 +290,7 @@ if archivo_banco and archivo_erp:
 
   def evaluar_estatus_erp(row):
     monto = row["Monto_Clean"]
-    if monto in montos_banco_set:
+    if monto in montos_banco_set or (-monto) in montos_banco_set:
       return "Conciliado"
     else:
       return "Pendiente por conciliar en banco"
