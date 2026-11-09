@@ -329,11 +329,9 @@ if archivo_banco and archivo_erp:
 
   df_banco["Estatus_Conciliacion"] = estatus_banco_lista
 
-  # Construcción del consolidado lado a lado (Side-by-Side)
-  erp_cols_renamed = {
-      c: f"ERP_{c}" for c in df_erp.columns if c != "Monto_Clean"
-  }
-  df_erp_temp = df_erp.rename(columns=erp_cols_renamed)
+  # Construcción del consolidado lado a lado (Side-by-Side) sin duplicar nombres
+  df_erp_temp = df_erp.copy()
+  df_erp_temp.columns = [f"ERP_{c}" for c in df_erp_temp.columns]
 
   erp_data_row_list = []
   for idx_e in match_erp_indices:
