@@ -98,7 +98,8 @@ def limpiar_tabla_financiera(archivo):
     if "fecha" in row_str and (
         "monto" in row_str
         or "importe" in row_str
-        or "debito" in row_str
+        or "cargo" in row_str
+        or "abono" in row_str
         or "referencia" in row_str
     ):
       header_row = idx
@@ -135,8 +136,8 @@ def limpiar_tabla_financiera(archivo):
 st.title("💼 Sistema Automatizado de Conciliación y Tesorería")
 st.markdown(
     "Cruza extractos bancarios contra mayores contables (SAP/ERP) fila por"
-    " fila, aplicando tasas BCV y generando el consolidado side-by-side de 4"
-    " pestañas."
+    " fila, evaluando Cargo y Abono, aplicando tasas BCV y generando reporte"
+    " de 4 pestañas."
 )
 
 with st.sidebar:
@@ -237,7 +238,7 @@ if archivo_banco and archivo_erp:
     st.error(f"Error al leer y limpiar los archivos subidos: {e}")
     st.stop()
 
-  # Detección de columnas clave
+  # Detección de columnas de Banco
   candidatos_monto = [
       "monto",
       "importe",
@@ -248,7 +249,6 @@ if archivo_banco and archivo_erp:
       "haber",
       "debe",
   ]
-
   col_monto_banco = next(
       (
           c
@@ -269,24 +269,49 @@ if archivo_banco and archivo_erp:
       df_banco.columns[0],
   )
 
-  col_monto_erp = next(
+  # Detección precisa de columnas Cargo y Abono en el ERP
+  col_cargo_erp = next(
       (
           c
           for c in df_erp.columns
-          if any(k in str(c).lower() for k in candidatos_monto)
+          if any(k in str(c).lower() for k in ["cargo", "debe", "débito"])
       ),
-      df_erp.columns[-1],
+      None,
+  )
+  col_abono_erp = next(
+      (
+          c
+          for c in df_erp.columns
+          if any(k in str(c).lower() for k in ["abono", "haber", "crédito"])
+      ),
+      None,
   )
 
-  # Limpieza de montos
+  if col_cargo_erp and col_abono_erp:
+    df_erp["Monto_Clean"] = (
+        df_erp[col_cargo_erp].apply(limpiar_monto)
+        - df_erp[col_abono_erp].apply(limpiar_monto)
+    ).round(2)
+  else:
+    # Si no están separadas, busca una columna general de monto
+    col_monto_erp = next(
+        (
+            c
+            for c in df_erp.columns
+            if any(k in str(c).lower() for k in candidatos_monto)
+        ),
+        df_erp.columns[-1],
+    )
+    df_erp["Monto_Clean"] = (
+        df_erp[col_monto_erp].apply(limpiar_monto).round(2)
+    )
+
+  # Limpieza de montos del banco
   df_banco["Monto_Clean"] = (
       df_banco[col_monto_banco].apply(limpiar_monto).round(2)
   )
-  df_erp["Monto_Clean"] = (
-      df_erp[col_monto_erp].apply(limpiar_monto).round(2)
-  )
 
-  # Asignación de tasa y conversión en divisa
+  # Asignación de tasa y conversión en divisa independiente para el Banco
   df_banco["Tasa_BCV"] = tasa_aplicada
   df_banco[f"Monto_{moneda_base}"] = (
       df_banco["Monto_Clean"] / df_banco["Tasa_BCV"]
@@ -297,7 +322,7 @@ if archivo_banco and archivo_erp:
       df_erp["Monto_Clean"] / df_erp["Tasa_BCV"]
   ).round(2)
 
-  # MOTOR DE CONCILIACIÓN FILA POR FILA (Cruce exacto Bancos vs ERP)
+  # MOTOR DE CONCILIACIÓN FILA POR FILA (Cruce exacto Bancos vs ERP considerando Cargo/Abono)
   erp_usados = set()
   estatus_banco_lista = []
   match_erp_indices = []
