@@ -107,7 +107,6 @@ def detectar_y_limpiar_tabla(archivo):
     df = pd.read_excel(archivo, skiprows=header_row)
 
   df = df.loc[:, ~df.columns.astype(str).str.contains("^Unnamed")]
-  # Eliminar filas donde el monto o la fecha estén vacíos
   df = df.dropna(how="all")
   return df
 
@@ -138,7 +137,7 @@ with st.sidebar:
       ["Automática (API BCV)", "Ingreso Manual"],
   )
 
-  tasa_manual = 1.0
+  tasa_aplicada = 36.00
   archivo_tasas = st.file_uploader(
       "Subir Histórico de Tasas (Excel de Respaldo)", type=["xlsx", "csv"]
   )
@@ -155,9 +154,9 @@ with st.sidebar:
 
   if tasa_api > 0:
     st.success(f"Tasa BCV vía API ({fecha_str}): Bs. {tasa_api:,.2f}")
-    tasa_manual = tasa_api
+    tasa_aplicada = tasa_api
   else:
-    tasa_encontrada_en_excel = False
+    tasa_encontrada = False
     if archivo_tasas is not None:
       try:
         df_t = (
@@ -187,24 +186,22 @@ with st.sidebar:
         match = df_t[df_t["Fecha_Filtro"] == fecha_str]
 
         if not match.empty:
-          tasa_manual = float(match.iloc[0][col_v])
+          tasa_aplicada = float(match.iloc[0][col_v])
           st.success(
-              f"Tasa obtenida del Excel de Respaldo: Bs. {tasa_manual:,.2f}"
+              f"Tasa exacta del respaldo ({fecha_str}): Bs."
+              f" {tasa_aplicada:,.2f}"
           )
-          tasa_encontrada_en_excel = True
+          tasa_encontrada = True
         else:
-          # Si no encuentra la fecha exacta, toma la última tasa disponible del archivo como respaldo seguro
-          tasa_manual = float(df_t.iloc[-1][col_v])
-          st.success(
-              f"Tasa tomada del registro final del respaldo: Bs."
-              f" {tasa_manual:,.2f}"
+          st.warning(
+              f"⚠️ Fecha {fecha_str} no hallada exactamente en el Excel."
+              " Usando tasa manual:"
           )
-          tasa_encontrada_en_excel = True
       except Exception as e:
         pass
 
-    if not tasa_encontrada_en_excel:
-      tasa_manual = st.number_input(
+    if not tasa_encontrada:
+      tasa_aplicada = st.number_input(
           "Tasa de respaldo / manual:", min_value=0.01, value=36.00, step=0.1
       )
 
@@ -220,7 +217,7 @@ if archivo_banco and archivo_erp:
     st.error(f"Error al leer y limpiar los archivos subidos: {e}")
     st.stop()
 
-  # Detección de columnas clave
+  # Detección de columnas clave en Banco
   col_monto_banco = next(
       (
           c
@@ -243,6 +240,7 @@ if archivo_banco and archivo_erp:
       df_banco.columns[0],
   )
 
+  # Detección de columnas clave en ERP
   col_monto_erp = next(
       (
           c
@@ -253,17 +251,29 @@ if archivo_banco and archivo_erp:
       ),
       df_erp.columns[-1],
   )
+  col_ref_erp = next(
+      (
+          c
+          for c in df_erp.columns
+          if any(k in str(c).lower() for k in ["referencia", "doc", "documento"])
+      ),
+      df_erp.columns[0],
+  )
 
-  # Limpieza de montos y redondeo a 2 decimales para asegurar cruce exacto
+  # Limpieza de montos y redondeo a 2 decimales
   df_banco["Monto_Clean"] = (
       df_banco[col_monto_banco].apply(limpiar_monto).round(2)
   )
-  df_erp["Monto_Clean"] = df_erp[col_monto_erp].apply(limpiar_monto).round(2)
+  df_erp["Monto_Clean"] = (
+      df_erp[col_monto_erp].apply(limpiar_monto).round(2)
+  )
 
-  # MOTOR DE CONCILIACIÓN FILA POR FILA
+  # MOTOR DE CONCILIACIÓN FILA POR FILA (BANCO Y ERP)
   montos_erp_set = set(df_erp["Monto_Clean"].values)
+  montos_banco_set = set(df_banco["Monto_Clean"].values)
 
-  def evaluar_estatus(row):
+
+  def evaluar_estatus_banco(row):
     monto = row["Monto_Clean"]
     desc = str(row[col_desc_banco]).lower()
     if any(k in desc for k in ["anul", "cancel", "revers"]):
@@ -273,9 +283,25 @@ if archivo_banco and archivo_erp:
     else:
       return "Pendiente por conciliar"
 
-  df_banco["Estatus_Conciliacion"] = df_banco.apply(evaluar_estatus, axis=1)
+
+  def evaluar_estatus_erp(row):
+    monto = row["Monto_Clean"]
+    if monto in montos_banco_set:
+      return "Conciliado"
+    else:
+      return "Pendiente por conciliar en banco"
+
+
+  df_banco["Estatus_Conciliacion"] = df_banco.apply(
+      evaluar_estatus_banco, axis=1
+  )
   df_banco[f"Monto_{moneda_base}"] = df_banco["Monto_Clean"] / (
-      tasa_manual if tasa_manual > 0 else 1
+      tasa_aplicada if tasa_aplicada > 0 else 1
+  )
+
+  df_erp["Estatus_Conciliacion"] = df_erp.apply(evaluar_estatus_erp, axis=1)
+  df_erp[f"Monto_{moneda_base}"] = df_erp["Monto_Clean"] / (
+      tasa_aplicada if tasa_aplicada > 0 else 1
   )
 
   # Métricas generales
@@ -325,11 +351,11 @@ if archivo_banco and archivo_erp:
     st.markdown("---")
     st.subheader(
         "📋 Consolidado de Conciliación Bancaria (Tasa Aplicada:"
-        f" {tasa_manual:,.2f})"
+        f" {tasa_aplicada:,.2f})"
     )
     st.markdown(
-        "Detalle fila por fila del extracto bancario con su respectivo estatus"
-        " de conciliación y conversión multidivisa."
+        "Detalle fila por fila con su respectivo estatus de conciliación y"
+        " conversión en divisas."
     )
 
     st.dataframe(df_banco, use_container_width=True)
@@ -364,7 +390,7 @@ if archivo_banco and archivo_erp:
               cant_pendientes,
               cant_reversos,
               total_comisiones,
-              tasa_manual,
+              tasa_aplicada,
           ],
       })
       df_resumen.to_excel(writer, index=False, sheet_name="Resumen_Gerencial")
@@ -389,8 +415,8 @@ if archivo_banco and archivo_erp:
 
     if not ia_disponible or API_KEY_OR == "tu-api-key-de-openrouter-aqui":
       st.warning(
-          "⚠️ Configura tu `OPENROUTER_API_KEY` en los secretos de Streamlit"
-          " para activar el chat inteligente."
+          "⚠️ Configura তোমার `OPENROUTER_API_KEY` en los secretos de"
+          " Streamlit para activar el chat inteligente."
       )
 
     for msg in st.session_state.mensajes_chat:
@@ -410,10 +436,12 @@ if archivo_banco and archivo_erp:
         with st.spinner("Analizando conciliación con Claude..."):
           try:
             resumen_contextual = (
-                f"DATOS DE CONCILIACIÓN BANCARIA:\n- Tasa BCV Aplicada: {tasa_manual}\n"
-                f"- Total Movimientos: {total_movimientos}\n- Conciliados: {cant_conciliados}\n"
-                f"- Pendientes por conciliar: {cant_pendientes}\n- Partidas Reversadas: {cant_reversos}\n"
-                f"- Total Comisiones: {total_comisiones}\n\nDetalle de filas:\n{df_banco[[col_desc_banco, col_monto_banco, 'Estatus_Conciliacion']].head(20).to_string()}"
+                f"DATOS DE CONCILIACIÓN BANCARIA:\n- Tasa BCV Aplicada:"
+                f" {tasa_aplicada}\n- Total Movimientos: {total_movimientos}\n-"
+                f" Conciliados: {cant_conciliados}\n- Pendientes por conciliar:"
+                f" {cant_pendientes}\n- Partidas Reversadas:"
+                f" {cant_reversos}\n- Total Comisiones: {total_comisiones}\n\nDetalle"
+                f" de filas:\n{df_banco[[col_desc_banco, col_monto_banco, 'Estatus_Conciliacion']].head(20).to_string()}"
             )
 
             prompt_sistema = (
@@ -453,7 +481,7 @@ if archivo_banco and archivo_erp:
       doc.add_paragraph(
           f"Fecha de emisión: {datetime.now().strftime('%Y-%m-%d')}"
       )
-      doc.add_paragraph(f"Tasa BCV Aplicada: Bs. {tasa_manual:,.2f}")
+      doc.add_paragraph(f"Tasa BCV Aplicada: Bs. {tasa_aplicada:,.2f}")
 
       doc.add_heading("1. Resumen de Estatus de Conciliación", level=1)
       doc.add_paragraph(f"• Total de Movimientos Analizados: {total_movimientos}")
