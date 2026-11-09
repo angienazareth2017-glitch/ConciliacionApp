@@ -107,7 +107,7 @@ st.markdown(
 # ---------------------------------------------------------
 # CONFIGURACIÓN DE OPENROUTER (CLIENTE DE IA)
 # ---------------------------------------------------------
-API_KEY_OR = st.secrets.get("OPENROUTER_API_KEY", "tu-api-key-de-openrouter-aqui")
+API_KEY_OR = st.secrets.get("OPENROUTER_API_KEY", "")
 
 try:
   from openai import OpenAI
@@ -123,6 +123,8 @@ except Exception:
 # ---------------------------------------------------------
 # CONTROL DE ACCESO BÁSICO (LOGIN)
 # ---------------------------------------------------------
+password_correcta = st.secrets.get("PASSWORD_ACCESO", "Ruben.1994.Juan")
+
 if "autenticado" not in st.session_state:
   st.session_state.autenticado = False
 
@@ -130,7 +132,7 @@ if not st.session_state.autenticado:
   st.title("🔒 Acceso al Sistema de Conciliación")
   password = st.text_input("Ingrese su contraseña de acceso:", type="password")
   if st.button("Ingresar"):
-    if password == "Ruben.1994.Juan":
+    if password == password_correcta:
       st.session_state.autenticado = True
       st.rerun()
     else:
@@ -213,8 +215,8 @@ def limpiar_monto(val):
     return 0.0
 
 
-def limpiar_tabla_financiera(archivo):
-  """Limpia metadatos corporativos superiores y detecta la tabla real de transacciones."""
+def limpiar_tabla_financiera(archivo, banco):
+  """Limpia metadatos corporativos y ajusta la cabecera según la estructura específica del banco."""
   if archivo.name.endswith(".csv"):
     df_raw = pd.read_csv(archivo, header=None)
   else:
@@ -223,15 +225,31 @@ def limpiar_tabla_financiera(archivo):
   header_row = 0
   for idx, row in df_raw.iterrows():
     row_str = " ".join([str(val) for val in row.values]).lower()
-    if "fecha" in row_str and (
-        "monto" in row_str
-        or "importe" in row_str
-        or "cargo" in row_str
-        or "abono" in row_str
-        or "referencia" in row_str
-    ):
-      header_row = idx
-      break
+    if banco == "Banco Mercantil":
+      if "fecha" in row_str and (
+          "referencia" in row_str or "descripcion" in row_str
+      ):
+        header_row = idx
+        break
+    elif banco == "Banesco":
+      if "fecha" in row_str and (
+          "movimiento" in row_str or "referencia" in row_str
+      ):
+        header_row = idx
+        break
+    elif banco == "BBVA Provincial":
+      if "fecha" in row_str and ("importe" in row_str or "saldo" in row_str):
+        header_row = idx
+        break
+    else:
+      if "fecha" in row_str and (
+          "monto" in row_str
+          or "importe" in row_str
+          or "cargo" in row_str
+          or "abono" in row_str
+      ):
+        header_row = idx
+        break
 
   if archivo.name.endswith(".csv"):
     df = pd.read_csv(archivo, skiprows=header_row)
@@ -251,7 +269,8 @@ def limpiar_tabla_financiera(archivo):
         .astype(str)
         .str.lower()
         .str.contains(
-            "nombre|cuenta|mes|total|banco|rif|empresa|número", na=False
+            "nombre|cuenta|mes|total|banco|rif|empresa|número|saldo inicial",
+            na=False,
         )
     ]
 
@@ -271,6 +290,16 @@ st.markdown(
 
 with st.sidebar:
   st.header("⚙️ Configuración y Carga")
+  banco_seleccionado = st.selectbox(
+      "Banco a Conciliar",
+      [
+          "Banco Mercantil",
+          "Banesco",
+          "BBVA Provincial",
+          "Banco de Venezuela",
+          "Otro / Genérico",
+      ],
+  )
   archivo_banco = st.file_uploader(
       "Subir Extracto Bancario (Excel/CSV)", type=["xlsx", "csv"]
   )
@@ -294,8 +323,8 @@ if "mensajes_chat" not in st.session_state:
 
 if archivo_banco and archivo_erp:
   try:
-    df_banco = limpiar_tabla_financiera(archivo_banco)
-    df_erp = limpiar_tabla_financiera(archivo_erp)
+    df_banco = limpiar_tabla_financiera(archivo_banco, banco_seleccionado)
+    df_erp = limpiar_tabla_financiera(archivo_erp, "Genérico")
   except Exception as e:
     st.error(f"Error al leer y limpiar los archivos subidos: {e}")
     st.stop()
@@ -361,6 +390,25 @@ if archivo_banco and archivo_erp:
       None,
   )
 
+  # Detección de Cuenta de Contrapartida en el ERP
+  col_cta_contra = next(
+      (
+          c
+          for c in df_erp.columns
+          if "contrapartida" in str(c).lower()
+          and "nombre" not in str(c).lower()
+      ),
+      None,
+  )
+  col_nom_contra = next(
+      (
+          c
+          for c in df_erp.columns
+          if "contrapartida" in str(c).lower() and "nombre" in str(c).lower()
+      ),
+      None,
+  )
+
   if col_cargo_erp and col_abono_erp:
     df_erp["Monto_Clean"] = (
         df_erp[col_cargo_erp].apply(limpiar_monto)
@@ -392,20 +440,16 @@ if archivo_banco and archivo_erp:
       return tasa_default
     f_str = f_dt.strftime("%Y-%m-%d")
 
-    # 1. Intentar API BCV en línea
     t_api = obtener_tasa_bcv_api(f_str)
     if t_api > 0:
       return t_api
 
-    # 2. Si falla la API, buscar en el Excel de respaldo
     if f_str in dict_tasas_respaldo:
       return dict_tasas_respaldo[f_str]
 
-    # 3. Fallback final si no está en ninguno de los dos
     return tasa_default
 
 
-  # Asignación de tasa y conversión fila por fila según la fecha del movimiento
   tasas_banco = [obtener_tasa_dual(f) for f in df_banco[col_fecha_banco]]
   df_banco["Tasa_BCV"] = tasas_banco
   df_banco[f"Monto_{moneda_base}"] = (
@@ -576,11 +620,11 @@ if archivo_banco and archivo_erp:
   with tab2:
     st.subheader("💬 Asistente IA Financiero (Claude vía OpenRouter)")
     st.markdown(
-        "Haz preguntas sobre las diferencias, comisiones o el estatus de las"
-        " partidas."
+        "Haz preguntas sobre las diferencias, comisiones o el estatus global de"
+        " la tesorería de forma segura y confidencial."
     )
 
-    if not ia_disponible or API_KEY_OR == "tu-api-key-de-openrouter-aqui":
+    if not ia_disponible or API_KEY_OR == "":
       st.warning(
           "⚠️ Configura tu `OPENROUTER_API_KEY` en los secretos de Streamlit"
           " para activar el chat inteligente."
@@ -599,22 +643,30 @@ if archivo_banco and archivo_erp:
       with st.chat_message("user"):
         st.write(pregunta)
 
-      if ia_disponible and API_KEY_OR != "tu-api-key-de-openrouter-aqui":
-        with st.spinner("Analizando conciliación con Claude..."):
+      if ia_disponible and API_KEY_OR != "":
+        with st.spinner("Analizando resúmenes financieros con Claude..."):
           try:
-            resumen_contextual = (
-                f"DATOS DE CONCILIACIÓN BANCARIA (MES COMPLETO):\n- Total"
-                f" Movimientos: {total_movimientos}\n- Conciliados:"
-                f" {cant_conciliados}\n- Pendientes por conciliar:"
-                f" {cant_pendientes}\n- Partidas Reversadas:"
-                f" {cant_reversos}\n- Total Comisiones: {total_comisiones}\n\nDetalle"
-                f" de filas:\n{df_consolidado[[col_desc_banco, col_monto_banco, 'Estatus_Conciliacion']].head(20).to_string()}"
-            )
+            # FILTRO DE PRIVACIDAD: Solo enviamos métricas globales, agregadas y totales
+            resumen_contextual = f"""
+                DATOS FINANCIEROS RESUMIDOS (CONFIDENCIAL):
+                - Tasa BCV aplicada promedio: {tasa_default:,.2f}
+                - Total de Movimientos analizados: {total_movimientos}
+                - Total General del Período: {total_general:,.2f} Bs.
+                - Total Ingresos: {total_ingresos:,.2f} Bs.
+                - Total Egresos: {total_egresos:,.2f} Bs.
+                - Partidas Conciliadas: {cant_conciliados}
+                - Partidas Pendientes por Conciliar: {cant_pendientes}
+                - Partidas Reversadas / Anuladas: {cant_reversos}
+                - Total Comisiones Bancarias: {abs(total_comisiones):,.2f} Bs.
+                - Columnas de contrapartida ERP detectadas: {'Sí' if col_cta_contra else 'No'}
+                """
 
             prompt_sistema = (
                 "Eres un auditor contable experto en tesorería corporativa en"
-                " Venezuela. Responde de forma directa, analítica y profesional"
-                " utilizando estrictamente los datos proporcionados:\n\n"
+                " Venezuela. Tu objetivo es asesorar a la gerencia utilizando"
+                " estrictamente los totales y métricas financieras agregadas"
+                " que se te proporcionan. Mantén la confidencialidad y céntrate"
+                " en el análisis de las cifras globales:\n\n"
                 + resumen_contextual
             )
 
@@ -689,7 +741,7 @@ if archivo_banco and archivo_erp:
 
 else:
   st.info(
-      "👈 Por favor, carga el Extracto Bancario, el Mayor Analítico y el Archivo"
-      " de Tasas de Respaldo en la barra lateral para iniciar la conciliación"
-      " del mes completo."
+      "👈 Por favor, selecciona el banco, carga el Extracto Bancario, el Mayor"
+      " Analítico y el Archivo de Tasas de Respaldo en la barra lateral para"
+      " iniciar la conciliación del mes completo."
   )
