@@ -85,8 +85,8 @@ def limpiar_monto(val):
     return 0.0
 
 
-def detectar_y_limpiar_tabla(archivo):
-  """Lee un archivo Excel/CSV buscando automáticamente la fila real de cabecera."""
+def limpiar_tabla_financiera(archivo):
+  """Limpia metadatos corporativos superiores y detecta la tabla real de transacciones."""
   if archivo.name.endswith(".csv"):
     df_raw = pd.read_csv(archivo, header=None)
   else:
@@ -95,12 +95,11 @@ def detectar_y_limpiar_tabla(archivo):
   header_row = 0
   for idx, row in df_raw.iterrows():
     row_str = " ".join([str(val) for val in row.values]).lower()
-    if (
-        "fecha" in row_str
-        or "monto" in row_str
+    if "fecha" in row_str and (
+        "monto" in row_str
         or "importe" in row_str
+        or "debito" in row_str
         or "referencia" in row_str
-        or "concepto" in row_str
     ):
       header_row = idx
       break
@@ -112,7 +111,22 @@ def detectar_y_limpiar_tabla(archivo):
 
   df = df.loc[:, ~df.columns.astype(str).str.contains("^Unnamed")]
   df = df.dropna(how="all")
-  return df
+
+  if len(df) > 0:
+    col_fecha = next(
+        (c for c in df.columns if "fecha" in str(c).lower()), df.columns[0]
+    )
+    df = df[df[col_fecha].notna()]
+    df = df[
+        ~df[col_fecha]
+        .astype(str)
+        .str.lower()
+        .str.contains(
+            "nombre|cuenta|mes|total|banco|rif|empresa|número", na=False
+        )
+    ]
+
+  return df.reset_index(drop=True)
 
 
 # ---------------------------------------------------------
@@ -121,7 +135,8 @@ def detectar_y_limpiar_tabla(archivo):
 st.title("💼 Sistema Automatizado de Conciliación y Tesorería")
 st.markdown(
     "Cruza extractos bancarios contra mayores contables (SAP/ERP) fila por"
-    " fila, aplica tasas BCV y genera reportes con 4 pestañas y IA."
+    " fila, aplicando tasas BCV y generando el consolidado side-by-side de 4"
+    " pestañas."
 )
 
 with st.sidebar:
@@ -197,10 +212,10 @@ with st.sidebar:
           )
           tasa_encontrada = True
         else:
-          # Búsqueda flexible por coincidencia parcial de fecha o tomando la última disponible
           tasa_aplicada = float(df_t.iloc[-1][col_v])
           st.success(
-              f"Tasa tomada del registro de respaldo: Bs. {tasa_aplicada:,.2f}"
+              f"Tasa tomada del registro final del respaldo: Bs."
+              f" {tasa_aplicada:,.2f}"
           )
           tasa_encontrada = True
       except Exception as e:
@@ -211,19 +226,18 @@ with st.sidebar:
           "Tasa de respaldo / manual:", min_value=0.01, value=37.03, step=0.01
       )
 
-# Estado de la sesión para el chat con IA
 if "mensajes_chat" not in st.session_state:
   st.session_state.mensajes_chat = []
 
 if archivo_banco and archivo_erp:
   try:
-    df_banco = detectar_y_limpiar_tabla(archivo_banco)
-    df_erp = detectar_y_limpiar_tabla(archivo_erp)
+    df_banco = limpiar_tabla_financiera(archivo_banco)
+    df_erp = limpiar_tabla_financiera(archivo_erp)
   except Exception as e:
     st.error(f"Error al leer y limpiar los archivos subidos: {e}")
     st.stop()
 
-  # Detección inteligente de columnas de Monto en Banco y ERP
+  # Detección de columnas clave
   candidatos_monto = [
       "monto",
       "importe",
@@ -235,14 +249,14 @@ if archivo_banco and archivo_erp:
       "debe",
   ]
 
-  col_monto_banco = None
-  for c in df_banco.columns:
-    if any(k in str(c).lower() for k in candidatos_monto):
-      col_monto_banco = c
-      break
-  if not col_monto_banco:
-    col_monto_banco = df_banco.columns[-1]
-
+  col_monto_banco = next(
+      (
+          c
+          for c in df_banco.columns
+          if any(k in str(c).lower() for k in candidatos_monto)
+      ),
+      df_banco.columns[-1],
+  )
   col_desc_banco = next(
       (
           c
@@ -255,15 +269,16 @@ if archivo_banco and archivo_erp:
       df_banco.columns[0],
   )
 
-  col_monto_erp = None
-  for c in df_erp.columns:
-    if any(k in str(c).lower() for k in candidatos_monto):
-      col_monto_erp = c
-      break
-  if not col_monto_erp:
-    col_monto_erp = df_erp.columns[-1]
+  col_monto_erp = next(
+      (
+          c
+          for c in df_erp.columns
+          if any(k in str(c).lower() for k in candidatos_monto)
+      ),
+      df_erp.columns[-1],
+  )
 
-  # Limpieza y redondeo estricto de montos
+  # Limpieza de montos
   df_banco["Monto_Clean"] = (
       df_banco[col_monto_banco].apply(limpiar_monto).round(2)
   )
@@ -271,41 +286,67 @@ if archivo_banco and archivo_erp:
       df_erp[col_monto_erp].apply(limpiar_monto).round(2)
   )
 
-  # MOTOR DE CONCILIACIÓN FILA POR FILA
-  # Cargos en ERP (positivos) vs Abonos en Banco (negativos)
-  montos_erp_set = set(df_erp["Monto_Clean"].values)
-  montos_banco_set = set(df_banco["Monto_Clean"].values)
+  # Asignación de tasa y conversión en divisa
+  df_banco["Tasa_BCV"] = tasa_aplicada
+  df_banco[f"Monto_{moneda_base}"] = (
+      df_banco["Monto_Clean"] / df_banco["Tasa_BCV"]
+  ).round(2)
 
+  df_erp["Tasa_BCV"] = tasa_aplicada
+  df_erp[f"Monto_{moneda_base}"] = (
+      df_erp["Monto_Clean"] / df_erp["Tasa_BCV"]
+  ).round(2)
 
-  def evaluar_estatus_banco(row):
-    monto = row["Monto_Clean"]
-    desc = str(row[col_desc_banco]).lower()
-    if any(k in desc for k in ["anul", "cancel", "revers"]):
-      return "Pendiente por contabilizar (Reversado)"
-    elif monto in montos_erp_set or (-monto) in montos_erp_set:
-      return "Conciliado"
+  # MOTOR DE CONCILIACIÓN FILA POR FILA (Cruce exacto Bancos vs ERP)
+  erp_usados = set()
+  estatus_banco_lista = []
+  match_erp_indices = []
+
+  for idx_b, row_b in df_banco.iterrows():
+    monto_b = row_b["Monto_Clean"]
+    desc_b = str(row_b[col_desc_banco]).lower()
+
+    if any(k in desc_b for k in ["anul", "cancel", "revers"]):
+      estatus_banco_lista.append("Pendiente por contabilizar (Reversado)")
+      match_erp_indices.append(None)
     else:
-      return "Pendiente por conciliar"
+      encontrado = None
+      for idx_e, row_e in df_erp.iterrows():
+        if idx_e in erp_usados:
+          continue
+        monto_e = row_e["Monto_Clean"]
+        if monto_b == monto_e or monto_b == -monto_e:
+          encontrado = idx_e
+          break
 
+      if encontrado is not None:
+        erp_usados.add(encontrado)
+        estatus_banco_lista.append("Conciliado")
+        match_erp_indices.append(encontrado)
+      else:
+        estatus_banco_lista.append("Pendiente por conciliar")
+        match_erp_indices.append(None)
 
-  def evaluar_estatus_erp(row):
-    monto = row["Monto_Clean"]
-    if monto in montos_banco_set or (-monto) in montos_banco_set:
-      return "Conciliado"
+  df_banco["Estatus_Conciliacion"] = estatus_banco_lista
+
+  # Construcción del consolidado lado a lado (Side-by-Side)
+  erp_cols_renamed = {
+      c: f"ERP_{c}" for c in df_erp.columns if c != "Monto_Clean"
+  }
+  df_erp_temp = df_erp.rename(columns=erp_cols_renamed)
+
+  erp_data_row_list = []
+  for idx_e in match_erp_indices:
+    if idx_e is not None and idx_e < len(df_erp_temp):
+      erp_data_row_list.append(df_erp_temp.iloc[idx_e].to_dict())
     else:
-      return "Pendiente por conciliar en banco"
+      empty_dict = {c: "" for c in df_erp_temp.columns}
+      erp_data_row_list.append(empty_dict)
 
-
-  df_banco["Estatus_Conciliacion"] = df_banco.apply(
-      evaluar_estatus_banco, axis=1
-  )
-  df_banco[f"Monto_{moneda_base}"] = df_banco["Monto_Clean"] / (
-      tasa_aplicada if tasa_aplicada > 0 else 1
-  )
-
-  df_erp["Estatus_Conciliacion"] = df_erp.apply(evaluar_estatus_erp, axis=1)
-  df_erp[f"Monto_{moneda_base}"] = df_erp["Monto_Clean"] / (
-      tasa_aplicada if tasa_aplicada > 0 else 1
+  df_erp_matched = pd.DataFrame(erp_data_row_list)
+  df_consolidado = pd.concat(
+      [df_banco.reset_index(drop=True), df_erp_matched.reset_index(drop=True)],
+      axis=1,
   )
 
   # Métricas generales
@@ -333,7 +374,6 @@ if archivo_banco and archivo_erp:
   )
   total_comisiones = df_banco[mask_comisiones]["Monto_Clean"].sum()
 
-  # Pestañas de la aplicación
   tab1, tab2, tab3 = st.tabs(
       [
           "📊 Conciliación Fila por Fila y Consolidado",
@@ -358,16 +398,16 @@ if archivo_banco and archivo_erp:
         f" {tasa_aplicada:,.2f})"
     )
     st.markdown(
-        "Detalle fila por fila con su respectivo estatus de conciliación y"
-        " conversión en divisas."
+        "Detalle side-by-side: Extracto Bancario, Tasa, Conversión en Divisas y"
+        " su respectivo Mayor Analítico ERP fila por fila."
     )
 
-    st.dataframe(df_banco, use_container_width=True)
+    st.dataframe(df_consolidado, use_container_width=True)
 
     # CREACIÓN DEL EXCEL CON LAS 4 PESTAÑAS EXACTAS SOLICITADAS
     buffer_excel = BytesIO()
     with pd.ExcelWriter(buffer_excel, engine="openpyxl") as writer:
-      df_banco.to_excel(
+      df_consolidado.to_excel(
           writer, index=False, sheet_name="Consolidado_Conciliacion"
       )
       df_banco.to_excel(writer, index=False, sheet_name="Extracto_Banco")
@@ -375,10 +415,10 @@ if archivo_banco and archivo_erp:
 
       df_resumen = pd.DataFrame({
           "Metrica": [
-              "Total Movimientos",
-              "Total General",
-              "Total Ingresos",
-              "Total Egresos",
+              "Total Movimientos Banco",
+              "Total General Banco",
+              "Total Ingresos Banco",
+              "Total Egresos Banco",
               "Partidas Conciliadas",
               "Partidas Pendientes por Conciliar",
               "Partidas Reversadas",
@@ -443,7 +483,7 @@ if archivo_banco and archivo_erp:
                 f"DATOS DE CONCILIACIÓN BANCARIA:\n- Tasa BCV Aplicada: {tasa_aplicada}\n"
                 f"- Total Movimientos: {total_movimientos}\n- Conciliados: {cant_conciliados}\n"
                 f"- Pendientes por conciliar: {cant_pendientes}\n- Partidas Reversadas: {cant_reversos}\n"
-                f"- Total Comisiones: {total_comisiones}\n\nDetalle de filas:\n{df_banco[[col_desc_banco, col_monto_banco, 'Estatus_Conciliacion']].head(20).to_string()}"
+                f"- Total Comisiones: {total_comisiones}\n\nDetalle de filas:\n{df_consolidado[[col_desc_banco, col_monto_banco, 'Estatus_Conciliacion']].head(20).to_string()}"
             )
 
             prompt_sistema = (
