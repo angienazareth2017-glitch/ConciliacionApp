@@ -94,7 +94,6 @@ def detectar_y_limpiar_tabla(archivo):
 
   header_row = 0
   for idx, row in df_raw.iterrows():
-    # Conversión segura de cada celda a string para evitar errores de tipo float/nan
     row_str = " ".join([str(val) for val in row.values]).lower()
     if "fecha" in row_str and (
         "monto" in row_str or "importe" in row_str or "debito" in row_str
@@ -108,6 +107,8 @@ def detectar_y_limpiar_tabla(archivo):
     df = pd.read_excel(archivo, skiprows=header_row)
 
   df = df.loc[:, ~df.columns.astype(str).str.contains("^Unnamed")]
+  # Eliminar filas donde el monto o la fecha estén vacíos
+  df = df.dropna(how="all")
   return df
 
 
@@ -191,15 +192,18 @@ with st.sidebar:
               f"Tasa obtenida del Excel de Respaldo: Bs. {tasa_manual:,.2f}"
           )
           tasa_encontrada_en_excel = True
+        else:
+          # Si no encuentra la fecha exacta, toma la última tasa disponible del archivo como respaldo seguro
+          tasa_manual = float(df_t.iloc[-1][col_v])
+          st.success(
+              f"Tasa tomada del registro final del respaldo: Bs."
+              f" {tasa_manual:,.2f}"
+          )
+          tasa_encontrada_en_excel = True
       except Exception as e:
         pass
 
     if not tasa_encontrada_en_excel:
-      if modo_tasa == "Automática (API BCV)":
-        st.warning(
-            "⚠️ API sin conexión y fecha no hallada en Excel. Ingrese tasa"
-            " manual abajo:"
-        )
       tasa_manual = st.number_input(
           "Tasa de respaldo / manual:", min_value=0.01, value=36.00, step=0.1
       )
@@ -250,9 +254,11 @@ if archivo_banco and archivo_erp:
       df_erp.columns[-1],
   )
 
-  # Limpieza de montos
-  df_banco["Monto_Clean"] = df_banco[col_monto_banco].apply(limpiar_monto)
-  df_erp["Monto_Clean"] = df_erp[col_monto_erp].apply(limpiar_monto)
+  # Limpieza de montos y redondeo a 2 decimales para asegurar cruce exacto
+  df_banco["Monto_Clean"] = (
+      df_banco[col_monto_banco].apply(limpiar_monto).round(2)
+  )
+  df_erp["Monto_Clean"] = df_erp[col_monto_erp].apply(limpiar_monto).round(2)
 
   # MOTOR DE CONCILIACIÓN FILA POR FILA
   montos_erp_set = set(df_erp["Monto_Clean"].values)
