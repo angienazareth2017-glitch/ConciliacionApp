@@ -85,13 +85,41 @@ def limpiar_monto(val):
     return 0.0
 
 
+def detectar_y_limpiar_tabla(archivo):
+  """Lee un archivo Excel/CSV buscando automáticamente la fila real de cabecera (Fecha, Monto, etc.)."""
+  if archivo.name.endswith(".csv"):
+    df_raw = pd.read_csv(archivo, header=None)
+  else:
+    df_raw = pd.read_excel(archivo, header=None)
+
+  # Buscamos la fila que contenga la palabra 'fecha' o 'monto' para usarla como cabecera real
+  header_row = 0
+  for idx, row in df_raw.iterrows():
+    row_str = " ".join(row.astype(str)).lower()
+    if "fecha" in row_str and (
+        "monto" in row_str or "importe" in row_str or "debito" in row_str
+    ):
+      header_row = idx
+      break
+
+  # Recargamos usando la fila de cabecera correcta
+  if archivo.name.endswith(".csv"):
+    df = pd.read_csv(archivo, skiprows=header_row)
+  else:
+    df = pd.read_excel(archivo, skiprows=header_row)
+
+  # Limpiamos columnas sin nombre o vacías
+  df = df.loc[:, ~df.columns.astype(str).str.contains("^Unnamed")]
+  return df
+
+
 # ---------------------------------------------------------
 # INTERFAZ PRINCIPAL
 # ---------------------------------------------------------
 st.title("💼 Sistema Automatizado de Conciliación y Tesorería")
 st.markdown(
     "Cruza extractos bancarios contra mayores contables (SAP/ERP) fila por"
-    " fila, aplica tasas BCV y genera reportes con IA."
+    " fila, aplica tasas BCV y genera reportes con 4 pestañas y IA."
 )
 
 with st.sidebar:
@@ -133,46 +161,25 @@ with st.sidebar:
     tasa_encontrada_en_excel = False
     if archivo_tasas is not None:
       try:
-        if archivo_tasas.name.endswith(".csv"):
-          df_t = pd.read_csv(archivo_tasas)
-        else:
-          df_t = pd.read_excel(archivo_tasas)
-
-        col_f = next(
-            (c for c in df_t.columns if "fecha" in c.lower()), df_t.columns[0]
-        )
-        col_v = next(
-            (
-                c
-                for c in df_t.columns
-                if any(k in c.lower() for k in ["tasa", "precio", "bcv", "valor"])
-            ),
-            df_t.columns[1],
-        )
-
-        df_t["Fecha_Filtro"] = pd.to_datetime(
-            df_t[col_f], errors="coerce"
-        ).dt.strftime("%Y-%m-%d")
+        df_t = pd.read_excel(archivo_tasas) if not archivo_tasas.name.endswith(".csv") else pd.read_csv(archivo_tasas)
+        # Identificar columna de fecha y de tasa de forma inteligente
+        col_f = next((c for c in df_t.columns if "fecha" in str(c).lower()), df_t.columns[0])
+        col_v = next((c for c in df_t.columns if any(k in str(c).lower() for k in ["tasa", "precio", "bcv", "valor", "cambio"])), df_t.columns[1])
+        
+        df_t["Fecha_Filtro"] = pd.to_datetime(df_t[col_f], errors="coerce").dt.strftime("%Y-%m-%d")
         match = df_t[df_t["Fecha_Filtro"] == fecha_str]
 
         if not match.empty:
           tasa_manual = float(match.iloc[0][col_v])
-          st.success(
-              f"Tasa obtenida del Excel de Respaldo: Bs. {tasa_manual:,.2f}"
-          )
+          st.success(f"Tasa obtenida del Excel de Respaldo: Bs. {tasa_manual:,.2f}")
           tasa_encontrada_en_excel = True
       except Exception as e:
         pass
 
     if not tasa_encontrada_en_excel:
       if modo_tasa == "Automática (API BCV)":
-        st.warning(
-            "⚠️ API sin conexión y fecha no hallada en Excel. Ingrese tasa"
-            " manual abajo:"
-        )
-      tasa_manual = st.number_input(
-          "Tasa de respaldo / manual:", min_value=0.01, value=36.00, step=0.1
-      )
+        st.warning("⚠️ API sin conexión y fecha no hallada en Excel. Ingrese tasa manual abajo:")
+      tasa_manual = st.number_input("Tasa de respaldo / manual:", min_value=0.01, value=36.00, step=0.1)
 
 # Estado de la sesión para el chat con IA
 if "mensajes_chat" not in st.session_state:
@@ -180,57 +187,17 @@ if "mensajes_chat" not in st.session_state:
 
 if archivo_banco and archivo_erp:
   try:
-    if archivo_banco.name.endswith(".csv"):
-      df_banco = pd.read_csv(archivo_banco)
-    else:
-      df_banco = pd.read_excel(archivo_banco)
-
-    if archivo_erp.name.endswith(".csv"):
-      df_erp = pd.read_csv(archivo_erp)
-    else:
-      df_erp = pd.read_excel(archivo_erp)
+    df_banco = detectar_y_limpiar_tabla(archivo_banco)
+    df_erp = detectar_y_limpiar_tabla(archivo_erp)
   except Exception as e:
-    st.error(f"Error al leer los archivos subidos: {e}")
+    st.error(f"Error al leer y limpiar los archivos subidos: {e}")
     st.stop()
 
-  # Detección automática de columnas clave en Banco y ERP
-  col_monto_banco = next(
-      (
-          c
-          for c in df_banco.columns
-          if any(
-              k in c.lower() for k in ["monto", "importe", "debito", "credito"]
-          )
-      ),
-      df_banco.columns[-1],
-  )
-  col_desc_banco = next(
-      (
-          c
-          for c in df_banco.columns
-          if any(k in c.lower() for k in ["desc", "concepto", "referencia"])
-      ),
-      df_banco.columns[0],
-  )
+  # Detección de columnas clave
+  col_monto_banco = next((c for c in df_banco.columns if any(k in str(c).lower() for k in ["monto", "importe", "debito", "credito"])), df_banco.columns[-1])
+  col_desc_banco = next((c for c in df_banco.columns if any(k in str(c).lower() for k in ["desc", "concepto", "referencia", "detalle"])), df_banco.columns[0])
 
-  col_monto_erp = next(
-      (
-          c
-          for c in df_erp.columns
-          if any(
-              k in c.lower() for k in ["monto", "importe", "debito", "credito"]
-          )
-      ),
-      df_erp.columns[-1],
-  )
-  col_ref_erp = next(
-      (
-          c
-          for c in df_erp.columns
-          if any(k in c.lower() for k in ["referencia", "doc", "documento"])
-      ),
-      df_erp.columns[0],
-  )
+  col_monto_erp = next((c for c in df_erp.columns if any(k in str(c).lower() for k in ["monto", "importe", "debito", "credito"])), df_erp.columns[-1])
 
   # Limpieza de montos
   df_banco["Monto_Clean"] = df_banco[col_monto_banco].apply(limpiar_monto)
@@ -250,9 +217,7 @@ if archivo_banco and archivo_erp:
       return "Pendiente por conciliar"
 
   df_banco["Estatus_Conciliacion"] = df_banco.apply(evaluar_estatus, axis=1)
-  df_banco[f"Monto_{moneda_base}"] = df_banco["Monto_Clean"] / (
-      tasa_manual if tasa_manual > 0 else 1
-  )
+  df_banco[f"Monto_{moneda_base}"] = df_banco["Monto_Clean"] / (tasa_manual if tasa_manual > 0 else 1)
 
   # Métricas generales
   total_movimientos = len(df_banco)
@@ -260,29 +225,21 @@ if archivo_banco and archivo_erp:
   total_egresos = df_banco[df_banco["Monto_Clean"] < 0]["Monto_Clean"].sum()
   total_general = df_banco["Monto_Clean"].sum()
 
-  cant_conciliados = (
-      df_banco["Estatus_Conciliacion"] == "Conciliado"
-  ).sum()
-  cant_pendientes = (
-      df_banco["Estatus_Conciliacion"] == "Pendiente por conciliar"
-  ).sum()
+  cant_conciliados = (df_banco["Estatus_Conciliacion"] == "Conciliado").sum()
+  cant_pendientes = (df_banco["Estatus_Conciliacion"] == "Pendiente por conciliar").sum()
   mask_reversos = df_banco["Estatus_Conciliacion"].str.contains("Reversado")
   cant_reversos = mask_reversos.sum()
   total_reversos = df_banco[mask_reversos]["Monto_Clean"].sum()
 
-  mask_comisiones = df_banco[col_desc_banco].astype(str).str.contains(
-      "comis|comisión|com", case=False, na=False
-  )
+  mask_comisiones = df_banco[col_desc_banco].astype(str).str.contains("comis|comisión|com", case=False, na=False)
   total_comisiones = df_banco[mask_comisiones]["Monto_Clean"].sum()
 
   # Pestañas de la aplicación
-  tab1, tab2, tab3 = st.tabs(
-      [
-          "📊 Conciliación Fila por Fila y Consolidado",
-          "💬 Asistente IA Financiero",
-          "📥 Exportar Reportes",
-      ]
-  )
+  tab1, tab2, tab3 = st.tabs([
+      "📊 Conciliación Fila por Fila y Consolidado",
+      "💬 Asistente IA Financiero",
+      "📥 Exportar Reportes",
+  ])
 
   with tab1:
     st.subheader("Resumen General de Tesorería y Cruce Fila por Fila")
@@ -295,57 +252,67 @@ if archivo_banco and archivo_erp:
     col5.metric("Comisiones Totales", f"{abs(total_comisiones):,.2f}")
 
     st.markdown("---")
-    st.subheader(
-        "📋 Consolidado de Conciliación Bancaria (Tasa Aplicada:"
-        f" {tasa_manual:,.2f})"
-    )
-    st.markdown(
-        "Detalle fila por fila del extracto bancario con su respectivo estatus"
-        " de conciliación y conversión multidivisa."
-    )
+    st.subheader(f"📋 Consolidado de Conciliación Bancaria (Tasa Aplicada: {tasa_manual:,.2f})")
+    st.markdown("Detalle fila por fila del extracto bancario con su respectivo estatus de conciliación y conversión multidivisa.")
 
     st.dataframe(df_banco, use_container_width=True)
 
+    # CREACIÓN DEL EXCEL CON LAS 4 PESTAÑAS EXACTAS SOLICITADAS
     buffer_excel = BytesIO()
     with pd.ExcelWriter(buffer_excel, engine="openpyxl") as writer:
-      df_banco.to_excel(
-          writer, index=False, sheet_name="Consolidado_Conciliacion"
-      )
+      df_banco.to_excel(writer, index=False, sheet_name="Consolidado_Conciliacion")
+      df_banco.to_excel(writer, index=False, sheet_name="Extracto_Banco")
+      df_erp.to_excel(writer, index=False, sheet_name="Mayor_ERP")
+      
+      # Pestaña de Resumen Gerencial
+      df_resumen = pd.DataFrame({
+          "Metrica": [
+              "Total Movimientos",
+              "Total General",
+              "Total Ingresos",
+              "Total Egresos",
+              "Partidas Conciliadas",
+              "Partidas Pendientes por Conciliar",
+              "Partidas Reversadas",
+              "Total Comisiones",
+              "Tasa BCV Aplicada",
+          ],
+          "Valor": [
+              total_movimientos,
+              total_general,
+              total_ingresos,
+              total_egresos,
+              cant_conciliados,
+              cant_pendientes,
+              cant_reversos,
+              total_comisiones,
+              tasa_manual,
+          ],
+      })
+      df_resumen.to_excel(writer, index=False, sheet_name="Resumen_Gerencial")
+
     buffer_excel.seek(0)
 
     st.download_button(
-        label="⬇️ Descargar Consolidado de Conciliación en Excel (.xlsx)",
+        label="⬇️ Descargar Consolidado Completo (4 Pestañas en Excel .xlsx)",
         data=buffer_excel,
-        file_name=f"Consolidado_Conciliacion_{datetime.now().strftime('%Y%m%d')}.xlsx",
-        mime=(
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        ),
+        file_name=f"Consolidado_Conciliacion_4_Pestanas_{datetime.now().strftime('%Y%m%d')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
   with tab2:
     st.subheader("💬 Asistente IA Financiero (Claude vía OpenRouter)")
-    st.markdown(
-        "Haz preguntas sobre las diferencias, comisiones o el estatus de las"
-        " partidas. La IA recibe automáticamente el resumen y el consolidado."
-    )
+    st.markdown("Haz preguntas sobre las diferencias, comisiones o el estatus de las partidas.")
 
     if not ia_disponible or API_KEY_OR == "tu-api-key-de-openrouter-aqui":
-      st.warning(
-          "⚠️ Configura tu `OPENROUTER_API_KEY` en los secretos de Streamlit para"
-          " activar el chat inteligente."
-      )
+      st.warning("⚠️ Configura tu `OPENROUTER_API_KEY` en los secretos de Streamlit para activar el chat inteligente.")
 
     for msg in st.session_state.mensajes_chat:
       with st.chat_message(msg["role"]):
         st.write(msg["content"])
 
-    if pregunta := st.chat_input(
-        "Ej: ¿Cuáles partidas quedaron pendientes por conciliar y a cuánto"
-        " ascienden?"
-    ):
-      st.session_state.mensajes_chat.append(
-          {"role": "user", "content": pregunta}
-      )
+    if pregunta := st.chat_input("Ej: ¿Cuáles partidas quedaron pendientes por conciliar?"):
+      st.session_state.mensajes_chat.append({"role": "user", "content": pregunta})
       with st.chat_message("user"):
         st.write(pregunta)
 
@@ -353,75 +320,51 @@ if archivo_banco and archivo_erp:
         with st.spinner("Analizando conciliación con Claude..."):
           try:
             resumen_contextual = (
-                f"DATOS DE CONCILIACIÓN BANCARIA:\n- Tasa BCV Aplicada:"
-                f" {tasa_manual}\n- Total Movimientos: {total_movimientos}\n-"
-                f" Conciliados: {cant_conciliados}\n- Pendientes por conciliar:"
-                f" {cant_pendientes}\n- Partidas Reversadas:"
-                f" {cant_reversos}\n- Total Comisiones: {total_comisiones}\n\nDetalle"
-                f" de filas procesadas:\n{df_banco[[col_desc_banco, col_monto_banco, 'Estatus_Conciliacion']].head(20).to_string()}"
+                f"DATOS DE CONCILIACIÓN BANCARIA:\n- Tasa BCV Aplicada: {tasa_manual}\n"
+                f"- Total Movimientos: {total_movimientos}\n- Conciliados: {cant_conciliados}\n"
+                f"- Pendientes por conciliar: {cant_pendientes}\n- Partidas Reversadas: {cant_reversos}\n"
+                f"- Total Comisiones: {total_comisiones}\n\nDetalle de filas:\n{df_banco[[col_desc_banco, col_monto_banco, 'Estatus_Conciliacion']].head(20).to_string()}"
             )
 
             prompt_sistema = (
-                "Eres un auditor contable experto en tesorería corporativa en"
-                " Venezuela. Responde de forma directa, analítica y profesional"
-                " utilizando estrictamente los datos del consolidado de"
-                " conciliación proporcionados a continuación:\n\n"
+                "Eres un auditor contable experto en tesorería corporativa en Venezuela. Responde de forma directa, analítica y profesional utilizando estrictamente los datos proporcionados:\n\n"
                 + resumen_contextual
             )
 
             response = client_or.chat.completions.create(
                 model="anthropic/claude-haiku-4.5",
-                messages=[{"role": "system", "content": prompt_sistema}]
-                + st.session_state.mensajes_chat,
+                messages=[{"role": "system", "content": prompt_sistema}] + st.session_state.mensajes_chat,
                 max_tokens=1000,
             )
             respuesta_ia = response.choices[0].message.content
           except Exception as e:
-            respuesta_ia = (
-                f"Ocurrió un error al conectar con OpenRouter: {str(e)}"
-            )
+            respuesta_ia = f"Ocurrió un error al conectar con OpenRouter: {str(e)}"
       else:
         respuesta_ia = "Simulación de respuesta de IA (Configure su API Key)."
 
-      st.session_state.mensajes_chat.append(
-          {"role": "assistant", "content": respuesta_ia}
-      )
+      st.session_state.mensajes_chat.append({"role": "assistant", "content": respuesta_ia})
       with st.chat_message("assistant"):
         st.write(respuesta_ia)
 
   with tab3:
     st.subheader("📥 Exportar Reportes")
-    st.markdown(
-        "Descarga el reporte gerencial completo en formato Word incluyendo el"
-        " estatus del cruce fila por fila y los insights de la IA."
-    )
+    st.markdown("Descarga el reporte gerencial completo en formato Word.")
 
     if st.button("📄 Generar Reporte Word"):
       doc = Document()
       doc.add_heading("Reporte Gerencial de Conciliación Bancaria", 0)
-      doc.add_paragraph(
-          f"Fecha de emisión: {datetime.now().strftime('%Y-%m-%d')}"
-      )
+      doc.add_paragraph(f"Fecha de emisión: {datetime.now().strftime('%Y-%m-%d')}")
       doc.add_paragraph(f"Tasa BCV Aplicada: Bs. {tasa_manual:,.2f}")
 
       doc.add_heading("1. Resumen de Estatus de Conciliación", level=1)
       doc.add_paragraph(f"• Total de Movimientos Analizados: {total_movimientos}")
       doc.add_paragraph(f"• Partidas en Estatus 'Conciliado': {cant_conciliados}")
-      doc.add_paragraph(
-          f"• Partidas en Estatus 'Pendiente por conciliar': {cant_pendientes}"
-      )
-      doc.add_paragraph(
-          "• Partidas en Estatus 'Pendiente por contabilizar (Reversado)':"
-          f" {cant_reversos}"
-      )
-      doc.add_paragraph(
-          f"• Total Comisiones Bancarias: {abs(total_comisiones):,.2f}"
-      )
+      doc.add_paragraph(f"• Partidas en Estatus 'Pendiente por conciliar': {cant_pendientes}")
+      doc.add_paragraph(f"• Partidas en Estatus 'Pendiente por contabilizar (Reversado)': {cant_reversos}")
+      doc.add_paragraph(f"• Total Comisiones Bancarias: {abs(total_comisiones):,.2f}")
 
       if st.session_state.mensajes_chat:
-        doc.add_heading(
-            "2. Análisis Conversacional e Insights del Asistente IA", level=1
-        )
+        doc.add_heading("2. Análisis Conversacional e Insights del Asistente IA", level=1)
         for msg in st.session_state.mensajes_chat:
           rol = "Usuario" if msg["role"] == "user" else "Asistente IA"
           doc.add_paragraph(f"{rol}: {msg['content']}")
@@ -434,13 +377,8 @@ if archivo_banco and archivo_erp:
           label="⬇️ Descargar Reporte en Word (.docx)",
           data=buffer,
           file_name=f"Reporte_Conciliacion_{datetime.now().strftime('%Y%m%d')}.docx",
-          mime=(
-              "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-          ),
+          mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       )
 
 else:
-  st.info(
-      "👈 Por favor, carga el Extracto Bancario y el Mayor Analítico en la barra"
-      " lateral para iniciar el cruce fila por fila."
-  )
+  st.info("👈 Por favor, carga el Extracto Bancario y el Mayor Analítico en la barra lateral para iniciar el cruce fila por fila.")
