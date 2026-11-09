@@ -65,8 +65,10 @@ def obtener_tasa_bcv(fecha_str):
   return 0.0
 
 
-def obtener_tasa_bcv_desde_excel(archivo_tasas, fecha_buscada_str):
-  """Busca la tasa en el Excel de respaldo para la fecha exacta (YYYY-MM-DD)."""
+def cargar_diccionario_tasas(archivo_tasas):
+  """Carga el archivo Excel de tasas y crea un diccionario de fechas para búsqueda rápida."""
+  dict_tasas = {}
+  ultima_tasa = 37.03  # Valor por defecto inicial
   try:
     df_t = (
         pd.read_excel(archivo_tasas)
@@ -88,16 +90,16 @@ def obtener_tasa_bcv_desde_excel(archivo_tasas, fecha_buscada_str):
         df_t.columns[1],
     )
 
-    df_t["Fecha_Filtro"] = pd.to_datetime(
-        df_t[col_f], errors="coerce"
-    ).dt.strftime("%Y-%m-%d")
-    match = df_t[df_t["Fecha_Filtro"] == fecha_buscada_str]
-
-    if not match.empty:
-      return float(match.iloc[0][col_v]), True
+    for _, row in df_t.iterrows():
+      f_val = pd.to_datetime(row[col_f], errors="coerce")
+      v_val = float(row[col_v])
+      if not pd.isna(f_val) and v_val > 0:
+        f_str = f_val.strftime("%Y-%m-%d")
+        dict_tasas[f_str] = v_val
+        ultima_tasa = v_val
   except Exception:
     pass
-  return 0.0, False
+  return dict_tasas, ultima_tasa
 
 
 def limpiar_monto(val):
@@ -171,8 +173,8 @@ def limpiar_tabla_financiera(archivo):
 st.title("💼 Sistema Automatizado de Conciliación y Tesorería")
 st.markdown(
     "Cruza extractos bancarios contra mayores contables (SAP/ERP) fila por"
-    " fila, evaluando Cargo y Abono, aplicando tasas BCV y generando reporte"
-    " de 4 pestañas."
+    " fila para el mes completo, aplicando tasa BCV por movimiento, evaluando"
+    " Cargo y Abono, y generando reporte de 4 pestañas."
 )
 
 with st.sidebar:
@@ -187,47 +189,13 @@ with st.sidebar:
 
   st.markdown("---")
   st.header("💱 Tasas y Conversión BCV")
-
   archivo_tasas = st.file_uploader(
-      "Subir Archivo Excel de Tasas (Respaldo)", type=["xlsx", "csv"]
+      "Subir Archivo Excel de Tasas (Histórico Respaldo)", type=["xlsx", "csv"]
   )
-  fecha_consulta = st.date_input(
-      "Fecha para consultar tasa BCV:", datetime.today()
+  st.info(
+      "💡 El sistema asignará automáticamente la tasa correspondiente a la"
+      " fecha de cada movimiento utilizando la API o tu archivo de respaldo."
   )
-  fecha_str = fecha_consulta.strftime("%Y-%m-%d")
-
-  tasa_aplicada = 0.0
-
-  # 1. Intentar API Automática
-  with st.spinner("Consultando API BCV..."):
-    tasa_api = obtener_tasa_bcv(fecha_str)
-
-  if tasa_api > 0:
-    st.success(f"Tasa BCV vía API ({fecha_str}): Bs. {tasa_api:,.2f}")
-    tasa_aplicada = tasa_api
-  else:
-    # 2. Si falla la API, buscar obligatoriamente en el Excel de respaldo
-    if archivo_tasas is not None:
-      tasa_excel, encontrada = obtener_tasa_bcv_desde_excel(
-          archivo_tasas, fecha_str
-      )
-      if encontrada:
-        st.success(
-            f"Tasa obtenida del Excel de Respaldo ({fecha_str}): Bs."
-            f" {tasa_excel:,.2f}"
-        )
-        tasa_aplicada = tasa_excel
-      else:
-        st.error(
-            f"❌ API sin conexión y la fecha {fecha_str} no fue hallada en el"
-            " archivo Excel de tasas."
-        )
-    else:
-      st.error(
-          "❌ API sin conexión. Por favor adjunte el archivo Excel de tasas de"
-          " respaldo."
-      )
-      tasa_aplicada = 1.0
 
 if "mensajes_chat" not in st.session_state:
   st.session_state.mensajes_chat = []
@@ -240,7 +208,17 @@ if archivo_banco and archivo_erp:
     st.error(f"Error al leer y limpiar los archivos subidos: {e}")
     st.stop()
 
-  # Detección de columnas de Banco
+  # Cargar diccionario de tasas del archivo si existe
+  dict_tasas_respaldo = {}
+  tasa_default = 37.03
+  if archivo_tasas is not None:
+    dict_tasas_respaldo, tasa_default = cargar_diccionario_tasas(archivo_tasas)
+
+  # Detección de columnas de Fecha y Monto en Banco
+  col_fecha_banco = next(
+      (c for c in df_banco.columns if "fecha" in str(c).lower()),
+      df_banco.columns[0],
+  )
   candidatos_monto = [
       "monto",
       "importe",
@@ -312,13 +290,47 @@ if archivo_banco and archivo_erp:
       df_banco[col_monto_banco].apply(limpiar_monto).round(2)
   )
 
-  # Asignación de tasa y conversión en divisa independiente para el Banco
-  df_banco["Tasa_BCV"] = tasa_aplicada
+
+  # Función para obtener tasa por fecha de movimiento
+  def obtener_tasa_por_movimiento(fecha_val):
+    f_dt = pd.to_datetime(fecha_val, errors="coerce")
+    if pd.isna(f_dt):
+      return tasa_default
+    f_str = f_dt.strftime("%Y-%m-%d")
+
+    # 1. Buscar en diccionario de respaldo del Excel
+    if f_str in dict_tasas_respaldo:
+      return dict_tasas_respaldo[f_str]
+
+    # 2. Consultar API si hay conexión
+    t_api = obtener_tasa_bcv(f_str)
+    if t_api > 0:
+      return t_api
+
+    # 3. Fallback al último valor conocido
+    return tasa_default
+
+
+  # Asignación de tasa y conversión fila por fila según la fecha del movimiento
+  tasas_banco = []
+  for f in df_banco[col_fecha_banco]:
+    tasas_banco.append(obtener_tasa_por_movimiento(f))
+
+  df_banco["Tasa_BCV"] = tasas_banco
   df_banco[f"Monto_{moneda_base}"] = (
       df_banco["Monto_Clean"] / df_banco["Tasa_BCV"]
   ).round(2)
 
-  df_erp["Tasa_BCV"] = tasa_aplicada
+  # Para el ERP replicamos la asignación de tasa según su fecha si la tiene
+  col_fecha_erp = next(
+      (c for c in df_erp.columns if "fecha" in str(c).lower()), None
+  )
+  if col_fecha_erp:
+    tasas_erp = [obtener_tasa_por_movimiento(f) for f in df_erp[col_fecha_erp]]
+    df_erp["Tasa_BCV"] = tasas_erp
+  else:
+    df_erp["Tasa_BCV"] = tasas_banco[0] if len(tasas_banco) > 0 else tasa_default
+
   df_erp[f"Monto_{moneda_base}"] = (
       df_erp["Monto_Clean"] / df_erp["Tasa_BCV"]
   ).round(2)
@@ -355,7 +367,7 @@ if archivo_banco and archivo_erp:
 
   df_banco["Estatus_Conciliacion"] = estatus_banco_lista
 
-  # Construcción del consolidado lado a lado (Side-by-Side) sin duplicar nombres
+  # Construcción del consolidado lado a lado (Side-by-Side)
   df_erp_temp = df_erp.copy()
   df_erp_temp.columns = [f"ERP_{c}" for c in df_erp_temp.columns]
 
@@ -391,7 +403,6 @@ if archivo_banco and archivo_erp:
   ).sum()
   mask_reversos = df_banco["Estatus_Conciliacion"].str.contains("Reversado")
   cant_reversos = mask_reversos.sum()
-  total_reversos = df_banco[mask_reversos]["Monto_Clean"].sum()
 
   mask_comisiones = df_banco[col_desc_banco].astype(str).str.contains(
       "comis|comisión|com", case=False, na=False
@@ -418,12 +429,12 @@ if archivo_banco and archivo_erp:
 
     st.markdown("---")
     st.subheader(
-        "📋 Consolidado de Conciliación Bancaria (Tasa Aplicada:"
-        f" {tasa_aplicada:,.2f})"
+        "📋 Consolidado de Conciliación Bancaria (Mes Completo - Tasas Dinámicas"
+        " por Fecha)"
     )
     st.markdown(
-        "Detalle side-by-side: Extracto Bancario, Tasa, Conversión en Divisas y"
-        " su respectivo Mayor Analítico ERP fila por fila."
+        "Detalle side-by-side: Extracto Bancario, Tasa del Día, Conversión en"
+        " Divisas y Mayor Analítico ERP."
     )
 
     st.dataframe(df_consolidado, use_container_width=True)
@@ -447,7 +458,6 @@ if archivo_banco and archivo_erp:
               "Partidas Pendientes por Conciliar",
               "Partidas Reversadas",
               "Total Comisiones",
-              "Tasa BCV Aplicada",
           ],
           "Valor": [
               total_movimientos,
@@ -458,7 +468,6 @@ if archivo_banco and archivo_erp:
               cant_pendientes,
               cant_reversos,
               total_comisiones,
-              tasa_aplicada,
           ],
       })
       df_resumen.to_excel(writer, index=False, sheet_name="Resumen_Gerencial")
@@ -504,10 +513,12 @@ if archivo_banco and archivo_erp:
         with st.spinner("Analizando conciliación con Claude..."):
           try:
             resumen_contextual = (
-                f"DATOS DE CONCILIACIÓN BANCARIA:\n- Tasa BCV Aplicada: {tasa_aplicada}\n"
-                f"- Total Movimientos: {total_movimientos}\n- Conciliados: {cant_conciliados}\n"
-                f"- Pendientes por conciliar: {cant_pendientes}\n- Partidas Reversadas: {cant_reversos}\n"
-                f"- Total Comisiones: {total_comisiones}\n\nDetalle de filas:\n{df_consolidado[[col_desc_banco, col_monto_banco, 'Estatus_Conciliacion']].head(20).to_string()}"
+                f"DATOS DE CONCILIACIÓN BANCARIA (MES COMPLETO):\n- Total"
+                f" Movimientos: {total_movimientos}\n- Conciliados:"
+                f" {cant_conciliados}\n- Pendientes por conciliar:"
+                f" {cant_pendientes}\n- Partidas Reversadas:"
+                f" {cant_reversos}\n- Total Comisiones: {total_comisiones}\n\nDetalle"
+                f" de filas:\n{df_consolidado[[col_desc_banco, col_monto_banco, 'Estatus_Conciliacion']].head(20).to_string()}"
             )
 
             prompt_sistema = (
@@ -547,7 +558,9 @@ if archivo_banco and archivo_erp:
       doc.add_paragraph(
           f"Fecha de emisión: {datetime.now().strftime('%Y-%m-%d')}"
       )
-      doc.add_paragraph(f"Tasa BCV Aplicada: Bs. {tasa_aplicada:,.2f}")
+      doc.add_paragraph(
+          "Periodo analizado: Mes completo según transacciones cargadas"
+      )
 
       doc.add_heading("1. Resumen de Estatus de Conciliación", level=1)
       doc.add_paragraph(f"• Total de Movimientos Analizados: {total_movimientos}")
@@ -586,6 +599,7 @@ if archivo_banco and archivo_erp:
 
 else:
   st.info(
-      "👈 Por favor, carga el Extracto Bancario y el Mayor Analítico en la barra"
-      " lateral para iniciar el cruce fila por fila."
+      "👈 Por favor, carga el Extracto Bancario, el Mayor Analítico y el Archivo"
+      " de Tasas de Respaldo en la barra lateral para iniciar la conciliación"
+      " del mes completo."
   )
