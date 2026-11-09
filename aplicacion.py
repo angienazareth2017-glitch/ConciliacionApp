@@ -14,6 +14,97 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------------
+# ESTILOS VISUALES AVANZADOS (INTERFAZ TIPO ERP)
+# ---------------------------------------------------------
+st.markdown(
+    """
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+        html, body, [class*="css"] {
+            font-family: 'Inter', sans-serif;
+        }
+
+        .main {
+            background-color: #0b0f19;
+            color: #f3f4f6;
+        }
+
+        [data-testid="stSidebar"] {
+            background-color: #111827;
+            border-right: 1px solid #1f2937;
+        }
+
+        div[data-testid="metric-container"] {
+            background: linear-gradient(135deg, #1f2937 0%, #111827 100%);
+            border: 1px solid #374151;
+            padding: 16px;
+            border-radius: 10px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+            transition: transform 0.2s ease;
+        }
+        div[data-testid="metric-container"]:hover {
+            transform: translateY(-2px);
+            border-color: #4b5563;
+        }
+        div[data-testid="metric-container"] label {
+            color: #9ca3af !important;
+            font-size: 0.85rem !important;
+            font-weight: 500;
+        }
+        div[data-testid="metric-container"] div[data-testid="stMetricValue"] {
+            color: #ffffff !important;
+            font-size: 1.6rem !important;
+            font-weight: 700;
+        }
+
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 8px;
+            background-color: #111827;
+            padding: 6px;
+            border-radius: 8px;
+            border: 1px solid #1f2937;
+        }
+        .stTabs [data-baseweb="tab"] {
+            background-color: transparent;
+            color: #9ca3af;
+            border-radius: 6px;
+            padding: 8px 16px;
+            font-weight: 500;
+        }
+        .stTabs [aria-selected="true"] {
+            background-color: #2563eb !important;
+            color: #ffffff !important;
+        }
+
+        [data-testid="stDataFrame"] {
+            border-radius: 8px;
+            border: 1px solid #1f2937;
+        }
+
+        .stButton button {
+            background-color: #2563eb;
+            color: white;
+            border-radius: 6px;
+            font-weight: 600;
+            border: none;
+            padding: 0.5rem 1rem;
+            transition: background-color 0.2s;
+        }
+        .stButton button:hover {
+            background-color: #1d4ed8;
+        }
+
+        .stAlert {
+            border-radius: 8px;
+            border: none;
+        }
+    </style>
+""",
+    unsafe_allow_html=True,
+)
+
+# ---------------------------------------------------------
 # CONFIGURACIÓN DE OPENROUTER (CLIENTE DE IA)
 # ---------------------------------------------------------
 API_KEY_OR = st.secrets.get("OPENROUTER_API_KEY", "tu-api-key-de-openrouter-aqui")
@@ -173,8 +264,8 @@ def limpiar_tabla_financiera(archivo):
 st.title("💼 Sistema Automatizado de Conciliación y Tesorería")
 st.markdown(
     "Cruza extractos bancarios contra mayores contables (SAP/ERP) fila por"
-    " fila para el mes completo, aplicando tasas BCV dinámicas (API con"
-    " respaldo Excel), evaluando Cargo y Abono, y generando reporte de 4"
+    " fila para el mes completo, aplicando tasas BCV automáticas (API con"
+    " respaldo en Excel), evaluando Cargo y Abono, y generando reporte de 4"
     " pestañas."
 )
 
@@ -432,7 +523,7 @@ if archivo_banco and archivo_erp:
         " Respaldo Excel)"
     )
     st.markdown(
-        "Detalle side-by-side: Extracto Bancario, Tasa BCV Automática, Conversión"
+        "Detalle side-by-side: Extracto Bancario, Tasa BCV Dinámica, Conversión"
         " en Divisas y Mayor Analítico ERP."
     )
 
