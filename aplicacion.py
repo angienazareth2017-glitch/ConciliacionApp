@@ -697,3 +697,43 @@ if archivo_banco and archivo_erp:
     )
 
     if not ia_disponible or API_KEY_OR == "":
+      st.warning(
+          "⚠️ Configura tu `OPENROUTER_API_KEY` en los secretos de Streamlit"
+          " para activar el chat inteligente."
+      )
+
+    for msg in st.session_state.mensajes_chat:
+      with st.chat_message(msg["role"]):
+        st.write(msg["content"])
+
+    if pregunta := st.chat_input(
+        "Ej: ¿Cuáles son las cuentas de contrapartida de mayor egreso?"
+    ):
+      st.session_state.mensajes_chat.append(
+          {"role": "user", "content": pregunta}
+      )
+      with st.chat_message("user"):
+        st.write(pregunta)
+
+      if ia_disponible and API_KEY_OR != "":
+        with st.spinner("Analizando información real con Claude..."):
+          try:
+            cols_ctx_e = [
+                c
+                for c in [col_cta_contra, col_nom_contra, "Monto_Clean"]
+                if c and c in top_10_egresos.columns
+            ]
+            cols_ctx_i = [
+                c
+                for c in [col_cta_contra, col_nom_contra, "Monto_Clean"]
+                if c and c in top_10_ingresos.columns
+            ]
+
+            top_egresos_resumen = (
+                top_10_egresos[cols_ctx_e].to_string(index=False)
+                if not top_10_egresos.empty
+                else "Sin datos"
+            )
+            top_ingresos_resumen = (
+                top_10_ingresos[cols_ctx_i].to_string(index=False)
+                if not
