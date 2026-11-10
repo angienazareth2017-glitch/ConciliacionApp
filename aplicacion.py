@@ -154,9 +154,8 @@ def limpiar_tabla_financiera(archivo, banco):
 
 st.title("💼 Sistema Automatizado de Conciliación y Tesorería")
 st.markdown(
-    "Cruza extractos bancarios contra mayores contables (SAP/ERP) fila por"
-    " fila para grandes volúmenes, aplicando tasas BCV automáticas (API con"
-    " respaldo en Excel)."
+    "Cruza extractos bancarios contra mayores contables (SAP/ERP) en una sola"
+    " fila horizontal por transacción, aplicando tasas BCV automáticas."
 )
 
 with st.sidebar:
@@ -337,26 +336,19 @@ if archivo_banco and archivo_erp:
       df_erp["Monto_Clean"] / df_erp["Tasa_BCV"]
   ).round(2)
 
-  # --- CRUCE Y CONSTRUCCIÓN DE FILAS SECUENCIALES (BANCO SEGUIDO DE SU ERP) ---
+  # --- CRUCE LOTE SIDE-BY-SIDE (UNA SOLA FILA HORIZONTAL) ---
   erp_usados = set()
-  filas_consolidadas = []
+  match_erp_indices = []
+  estatus_banco_lista = []
 
   for idx_b, row_b in df_banco.iterrows():
     monto_b = row_b["Monto_Clean"]
     desc_b = str(row_b[col_desc_banco]).lower()
 
-    # Fila base del Banco
-    dict_banco_fila = row_b.to_dict()
-    dict_banco_fila["Tipo_Fila"] = "EXTRACTO_BANCO"
-    dict_banco_fila["Estatus_Conciliacion"] = (
-        "Pendiente por contabilizar (Reversado)"
-        if any(k in desc_b for k in ["anul", "cancel", "revers"])
-        else "Pendiente por conciliar"
-    )
-    filas_consolidadas.append(dict_banco_fila)
-
-    # Buscar coincidencia en el ERP si no está reversado
-    if not any(k in desc_b for k in ["anul", "cancel", "revers"]):
+    if any(k in desc_b for k in ["anul", "cancel", "revers"]):
+      estatus_banco_lista.append("Pendiente por contabilizar (Reversado)")
+      match_erp_indices.append(None)
+    else:
       encontrado = None
       for idx_e, row_e in df_erp.iterrows():
         if idx_e in erp_usados:
@@ -367,32 +359,30 @@ if archivo_banco and archivo_erp:
 
       if encontrado is not None:
         erp_usados.add(encontrado)
-        # Actualizar estatus en la fila del banco recién agregada
-        filas_consolidadas[-1]["Estatus_Conciliacion"] = "Conciliado"
+        estatus_banco_lista.append("Conciliado")
+        match_erp_indices.append(encontrado)
+      else:
+        estatus_banco_lista.append("Pendiente por conciliar")
+        match_erp_indices.append(None)
 
-        # Fila correspondiente del ERP justo debajo de la del banco
-        row_e_match = df_erp.loc[encontrado]
-        dict_erp_fila = {
-            f"ERP_{k}": v for k, v in row_e_match.to_dict().items()
-        }
-        dict_erp_fila["Tipo_Fila"] = "MAYOR_ERP_MATCH"
-        dict_erp_fila[col_fecha_banco] = row_e_match.get(
-            col_fecha_erp, row_b[col_fecha_banco]
-        )
-        dict_erp_fila[col_desc_banco] = (
-            f"[CONCILIADO ERP] Cta Contrapartida:"
-            f" {row_e_match.get(col_cta_contra, '')} -"
-            f" {row_e_match.get(col_nom_contra, '')}"
-        )
-        dict_erp_fila["Monto_Clean"] = row_e_match["Monto_Clean"]
-        dict_erp_fila["Tasa_BCV"] = row_e_match["Tasa_BCV"]
-        dict_erp_fila[f"Monto_{moneda_base}"] = row_e_match[
-            f"Monto_{moneda_base}"
-        ]
-        dict_erp_fila["Estatus_Conciliacion"] = "Match Confirmado"
-        filas_consolidadas.append(dict_erp_fila)
+  df_banco["Estatus_Conciliacion"] = estatus_banco_lista
 
-  df_consolidado = pd.DataFrame(filas_consolidadas)
+  df_erp_temp = df_erp.copy()
+  df_erp_temp.columns = [f"ERP_{c}" for c in df_erp_temp.columns]
+
+  erp_data_row_list = []
+  for idx_e in match_erp_indices:
+    if idx_e is not None and idx_e < len(df_erp_temp):
+      erp_data_row_list.append(df_erp_temp.iloc[idx_e].to_dict())
+    else:
+      empty_dict = {c: "" for c in df_erp_temp.columns}
+      erp_data_row_list.append(empty_dict)
+
+  df_erp_matched = pd.DataFrame(erp_data_row_list)
+  df_consolidado = pd.concat(
+      [df_banco.reset_index(drop=True), df_erp_matched.reset_index(drop=True)],
+      axis=1,
+  )
 
   total_movimientos = len(df_banco)
   total_ingresos = df_banco[df_banco["Monto_Clean"] > 0][
@@ -431,7 +421,7 @@ if archivo_banco and archivo_erp:
 
   with tab1:
     st.subheader(
-        "Resumen General de Tesorería y Cruce Secuencial Fila por Fila"
+        "Resumen General de Tesorería y Consolidado Horizontal (Side-by-Side)"
     )
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Total Movimientos", total_movimientos)
@@ -467,7 +457,7 @@ if archivo_banco and archivo_erp:
         st.info("Sin ingresos.")
 
     st.markdown("---")
-    st.subheader("📋 Consolidado Secuencial Fila por Fila")
+    st.subheader("📋 Consolidado en Una Sola Fila (Side-by-Side)")
     st.dataframe(df_consolidado, use_container_width=True)
 
     buffer_excel = BytesIO()
