@@ -1,5 +1,6 @@
 from datetime import datetime
 from io import BytesIO
+import re
 import openpyxl
 import pandas as pd
 import requests
@@ -222,7 +223,6 @@ if archivo_banco and archivo_erp:
       df_banco.columns[-1],
   )
 
-  # Detección ultra robusta de la columna de descripción del banco
   candidatos_desc_banco = [
       c
       for c in df_banco.columns
@@ -435,7 +435,6 @@ if archivo_banco and archivo_erp:
       r"|mantenimiento|emision|estado de cuenta|canal"
   )
 
-  # Evaluamos tanto la columna detectada como una concatenación de todo el texto de la fila del banco
   def es_comision(row):
     texto_fila = " ".join([str(val) for val in row.values]).lower()
     return bool(re.search(patron_comisiones, texto_fila))
