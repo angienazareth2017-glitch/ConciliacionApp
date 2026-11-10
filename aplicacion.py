@@ -321,6 +321,12 @@ with st.sidebar:
 
 if archivo_banco and archivo_erp:
   try:
+    # Leer el ERP crudo completo antes de filtrar para contar los reversos exactos
+    if archivo_erp.name.endswith(".csv"):
+      df_erp_raw_full = pd.read_csv(archivo_erp)
+    else:
+      df_erp_raw_full = pd.read_excel(archivo_erp)
+
     df_banco = limpiar_tabla_financiera(archivo_banco, banco_seleccionado)
     df_erp = limpiar_tabla_financiera(archivo_erp, "Genérico")
   except Exception as e:
@@ -421,20 +427,31 @@ if archivo_banco and archivo_erp:
         df_erp[col_monto_erp].apply(limpiar_monto).round(2)
     )
 
-  # FILTRO ESTRICTO: Excluir montos cero y partidas anuladas / "Cancelar entrada"
-  df_erp = df_erp[df_erp["Monto_Clean"] != 0.0].copy()
-  candidatos_desc_erp = [
+  # CONTEO DE PARTIDAS REVERSADAS DESDE EL MAYOR ANALÍTICO (ERP)
+  patron_anulacion = "anul|cancelar entrada|cancel|revers|nula|reverso"
+  candidatos_desc_erp_full = [
       c
       for c in df_erp.columns
       if any(
           k in str(c).lower() for k in ["desc", "concepto", "detalle", "nombre"]
-      )
+      ]
   ]
-  if candidatos_desc_erp:
-    col_desc_erp_eval = candidatos_desc_erp[0]
-    patron_anulacion = "anul|cancelar entrada|cancel|revers|nula|reverso"
+  cant_reversos = 0
+  if candidatos_desc_erp_full:
+    col_eval_erp = candidatos_desc_erp_full[0]
+    mask_reversos_erp = (
+        df_erp[col_eval_erp]
+        .astype(str)
+        .str.lower()
+        .str.contains(patron_anulacion, na=False)
+    )
+    cant_reversos = mask_reversos_erp.sum()
+
+  # FILTRO ESTRICTO: Excluir del ERP montos cero y partidas anuladas / "Cancelar entrada"
+  df_erp = df_erp[df_erp["Monto_Clean"] != 0.0].copy()
+  if candidatos_desc_erp_full:
     mask_no_anulados = (
-        ~df_erp[col_desc_erp_eval]
+        ~df_erp[col_eval_erp]
         .astype(str)
         .str.lower()
         .str.contains(patron_anulacion, na=False)
@@ -544,11 +561,10 @@ if archivo_banco and archivo_erp:
   cant_pendientes = (
       df_banco["Estatus_Conciliacion"] == "Pendiente por conciliar"
   ).sum()
-  mask_reversos = df_banco["Estatus_Conciliacion"].str.contains("Reversado")
-  cant_reversos = mask_reversos.sum()
 
+  # CÁLCULO DE COMISIONES DESDE EL EXTRACTO BANCARIO
   mask_comisiones = df_banco[col_desc_banco].astype(str).str.contains(
-      "comis|comisión|com", case=False, na=False
+      "comis|comisión|com|igtf|serv", case=False, na=False
   )
   total_comisiones = df_banco[mask_comisiones]["Monto_Clean"].sum()
 
@@ -577,8 +593,8 @@ if archivo_banco and archivo_erp:
     col1.metric("Total Movimientos", total_movimientos)
     col2.metric("Conciliados", cant_conciliados)
     col3.metric("Pendientes Conciliar", cant_pendientes)
-    col4.metric("Partidas Reversadas", cant_reversos)
-    col5.metric("Comisiones Totales", f"{abs(total_comisiones):,.2f}")
+    col4.metric("Partidas Reversadas (ERP)", cant_reversos)
+    col5.metric("Comisiones (Banco)", f"{abs(total_comisiones):,.2f}")
 
     st.markdown("---")
     st.subheader(
@@ -652,8 +668,8 @@ if archivo_banco and archivo_erp:
               "Total Egresos Banco",
               "Partidas Conciliadas",
               "Partidas Pendientes por Conciliar",
-              "Partidas Reversadas",
-              "Total Comisiones",
+              "Partidas Reversadas (ERP)",
+              "Total Comisiones (Banco)",
           ],
           "Valor": [
               total_movimientos,
@@ -737,7 +753,8 @@ if archivo_banco and archivo_erp:
                 f"- Total Egresos: {total_egresos:,.2f} Bs.\n"
                 f"- Partidas Conciliadas: {cant_conciliados}\n"
                 f"- Partidas Pendientes: {cant_pendientes}\n"
-                f"- Total Comisiones: {abs(total_comisiones):,.2f} Bs.\n\n"
+                f"- Partidas Reversadas (ERP): {cant_reversos}\n"
+                f"- Total Comisiones (Banco): {abs(total_comisiones):,.2f} Bs.\n\n"
                 "TOP 10 EGRESOS REALES (EXCLUYENDO ANULADOS/REVERSADOS):\n"
                 f"{top_egresos_resumen}\n\n"
                 "TOP 10 INGRESOS REALES (EXCLUYENDO ANULADOS/REVERSADOS):\n"
@@ -748,9 +765,7 @@ if archivo_banco and archivo_erp:
                 "Eres un auditor contable experto en tesorería corporativa en"
                 " Venezuela. Responde de forma directa, analítica y profesional"
                 " utilizando estrictamente los datos reales y Top 10"
-                " proporcionados (los cuales ya tienen excluidas las partidas"
-                " anuladas o reversadas). No inventes montos ni cuentas que no"
-                " estén aquí listados:\n\n"
+                " proporcionados:\n\n"
                 + resumen_contextual
             )
 
@@ -799,11 +814,10 @@ if archivo_banco and archivo_erp:
           f"• Partidas en Estatus 'Pendiente por conciliar': {cant_pendientes}"
       )
       doc.add_paragraph(
-          "• Partidas en Estatus 'Pendiente por contabilizar (Reversado)':"
-          f" {cant_reversos}"
+          f"• Partidas Reversadas / Anuladas (ERP): {cant_reversos}"
       )
       doc.add_paragraph(
-          f"• Total Comisiones Bancarias: {abs(total_comisiones):,.2f}"
+          f"• Total Comisiones Bancarias (Banco): {abs(total_comisiones):,.2f}"
       )
 
       if not top_10_egresos.empty:
