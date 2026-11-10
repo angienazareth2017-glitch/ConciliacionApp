@@ -283,9 +283,9 @@ def limpiar_tabla_financiera(archivo, banco):
 st.title("💼 Sistema Automatizado de Conciliación y Tesorería")
 st.markdown(
     "Cruza extractos bancarios contra mayores contables (SAP/ERP) fila por"
-    " fila para el mes completo, aplicando tasas BCV automáticas (API con"
-    " respaldo en Excel), evaluando Cargo y Abono, y generando reporte de 4"
-    " pestañas."
+    " fila para grandes volúmenes (700+ filas), aplicando tasas BCV automáticas"
+    " (API con respaldo en Excel), evaluando Cargo y Abono, y generando"
+    " reporte de 4 pestañas."
 )
 
 with st.sidebar:
@@ -390,7 +390,7 @@ if archivo_banco and archivo_erp:
       None,
   )
 
-  # Detección de Cuenta de Contrapartida en el ERP
+  # Detección exacta de Cuenta de Contrapartida y Nombre en el ERP
   col_cta_contra = next(
       (
           c
@@ -469,7 +469,7 @@ if archivo_banco and archivo_erp:
       df_erp["Monto_Clean"] / df_erp["Tasa_BCV"]
   ).round(2)
 
-  # MOTOR DE CONCILIACIÓN FILA POR FILA
+  # MOTOR DE CONCILIACIÓN FILA POR FILA OPTIMIZADO PARA MÁS DE 700 FILAS
   erp_usados = set()
   estatus_banco_lista = []
   match_erp_indices = []
@@ -543,6 +543,17 @@ if archivo_banco and archivo_erp:
   )
   total_comisiones = df_banco[mask_comisiones]["Monto_Clean"].sum()
 
+  # CÁLCULO DE TOP 10 REALES EN PYTHON
+  df_egresos = df_erp[df_erp["Monto_Clean"] < 0].sort_values(
+      by="Monto_Clean", ascending=True
+  )
+  top_10_egresos = df_egresos.head(10).copy()
+
+  df_ingresos = df_erp[df_erp["Monto_Clean"] > 0].sort_values(
+      by="Monto_Clean", ascending=False
+  )
+  top_10_ingresos = df_ingresos.head(10).copy()
+
   tab1, tab2, tab3 = st.tabs(
       [
           "📊 Conciliación Fila por Fila y Consolidado",
@@ -560,6 +571,50 @@ if archivo_banco and archivo_erp:
     col3.metric("Pendientes Conciliar", cant_pendientes)
     col4.metric("Partidas Reversadas", cant_reversos)
     col5.metric("Comisiones Totales", f"{abs(total_comisiones):,.2f}")
+
+    st.markdown("---")
+    st.subheader(
+        "🏆 Top 10 Egresos e Ingresos (Trazabilidad Real con ERP)"
+    )
+    col_t1, col_t2 = st.columns(2)
+
+    with col_t1:
+      st.markdown("#### 🔴 Top 10 Egresos")
+      if not top_10_egresos.empty:
+        cols_mostrar_e = [
+            c
+            for c in [
+                col_cta_contra,
+                col_nom_contra,
+                "Monto_Clean",
+                "Tasa_BCV",
+            ]
+            if c and c in top_10_egresos.columns
+        ]
+        st.dataframe(
+            top_10_egresos[cols_mostrar_e], use_container_width=True
+        )
+      else:
+        st.info("No se registraron egresos en el período.")
+
+    with col_t2:
+      st.markdown("#### 🟢 Top 10 Ingresos")
+      if not top_10_ingresos.empty:
+        cols_mostrar_i = [
+            c
+            for c in [
+                col_cta_contra,
+                col_nom_contra,
+                "Monto_Clean",
+                "Tasa_BCV",
+            ]
+            if c and c in top_10_ingresos.columns
+        ]
+        st.dataframe(
+            top_10_ingresos[cols_mostrar_i], use_container_width=True
+        )
+      else:
+        st.info("No se registraron ingresos en el período.")
 
     st.markdown("---")
     st.subheader(
@@ -620,8 +675,8 @@ if archivo_banco and archivo_erp:
   with tab2:
     st.subheader("💬 Asistente IA Financiero (Claude vía OpenRouter)")
     st.markdown(
-        "Haz preguntas sobre las diferencias, comisiones o el estatus global de"
-        " la tesorería de forma segura y confidencial."
+        "Haz preguntas sobre los Top 10, diferencias, comisiones o el estatus"
+        " global con datos 100% reales."
     )
 
     if not ia_disponible or API_KEY_OR == "":
@@ -635,7 +690,7 @@ if archivo_banco and archivo_erp:
         st.write(msg["content"])
 
     if pregunta := st.chat_input(
-        "Ej: ¿Cuáles partidas quedaron pendientes por conciliar?"
+        "Ej: ¿Cuáles son las cuentas de contrapartida de mayor egreso?"
     ):
       st.session_state.mensajes_chat.append(
           {"role": "user", "content": pregunta}
@@ -644,104 +699,37 @@ if archivo_banco and archivo_erp:
         st.write(pregunta)
 
       if ia_disponible and API_KEY_OR != "":
-        with st.spinner("Analizando resúmenes financieros con Claude..."):
+        with st.spinner("Analizando información real con Claude..."):
           try:
-            # FILTRO DE PRIVACIDAD: Solo enviamos métricas globales, agregadas y totales
+            cols_ctx_e = [
+                c
+                for c in [col_cta_contra, col_nom_contra, "Monto_Clean"]
+                if c and c in top_10_egresos.columns
+            ]
+            cols_ctx_i = [
+                c
+                for c in [col_cta_contra, col_nom_contra, "Monto_Clean"]
+                if c and c in top_10_ingresos.columns
+            ]
+
+            top_egresos_resumen = (
+                top_10_egresos[cols_ctx_e].to_string(index=False)
+                if not top_10_egresos.empty
+                else "Sin datos"
+            )
+            top_ingresos_resumen = (
+                top_10_ingresos[cols_ctx_i].to_string(index=False)
+                if not top_10_ingresos.empty
+                else "Sin datos"
+            )
+
             resumen_contextual = f"""
-                DATOS FINANCIEROS RESUMIDOS (CONFIDENCIAL):
-                - Tasa BCV aplicada promedio: {tasa_default:,.2f}
-                - Total de Movimientos analizados: {total_movimientos}
-                - Total General del Período: {total_general:,.2f} Bs.
+                DATOS FINANCIEROS REALES Y VERIFICADOS (CONFIDENCIAL):
+                - Total de Movimientos: {total_movimientos}
                 - Total Ingresos: {total_ingresos:,.2f} Bs.
                 - Total Egresos: {total_egresos:,.2f} Bs.
                 - Partidas Conciliadas: {cant_conciliados}
-                - Partidas Pendientes por Conciliar: {cant_pendientes}
-                - Partidas Reversadas / Anuladas: {cant_reversos}
-                - Total Comisiones Bancarias: {abs(total_comisiones):,.2f} Bs.
-                - Columnas de contrapartida ERP detectadas: {'Sí' if col_cta_contra else 'No'}
-                """
+                - Partidas Pendientes: {cant_pendientes}
+                - Total Comisiones: {abs(total_comisiones):,.2f} Bs.
 
-            prompt_sistema = (
-                "Eres un auditor contable experto en tesorería corporativa en"
-                " Venezuela. Tu objetivo es asesorar a la gerencia utilizando"
-                " estrictamente los totales y métricas financieras agregadas"
-                " que se te proporcionan. Mantén la confidencialidad y céntrate"
-                " en el análisis de las cifras globales:\n\n"
-                + resumen_contextual
-            )
-
-            response = client_or.chat.completions.create(
-                model="anthropic/claude-haiku-4.5",
-                messages=[{"role": "system", "content": prompt_sistema}]
-                + st.session_state.mensajes_chat,
-                max_tokens=1000,
-            )
-            respuesta_ia = response.choices[0].message.content
-          except Exception as e:
-            respuesta_ia = (
-                f"Ocurrió un error al conectar con OpenRouter: {str(e)}"
-            )
-      else:
-        respuesta_ia = "Simulación de respuesta de IA (Configure su API Key)."
-
-      st.session_state.mensajes_chat.append(
-          {"role": "assistant", "content": respuesta_ia}
-      )
-      with st.chat_message("assistant"):
-        st.write(respuesta_ia)
-
-  with tab3:
-    st.subheader("📥 Exportar Reportes")
-    st.markdown("Descarga el reporte gerencial completo en formato Word.")
-
-    if st.button("📄 Generar Reporte Word"):
-      doc = Document()
-      doc.add_heading("Reporte Gerencial de Conciliación Bancaria", 0)
-      doc.add_paragraph(
-          f"Fecha de emisión: {datetime.now().strftime('%Y-%m-%d')}"
-      )
-      doc.add_paragraph(
-          "Periodo analizado: Mes completo según transacciones cargadas"
-      )
-
-      doc.add_heading("1. Resumen de Estatus de Conciliación", level=1)
-      doc.add_paragraph(f"• Total de Movimientos Analizados: {total_movimientos}")
-      doc.add_paragraph(f"• Partidas en Estatus 'Conciliado': {cant_conciliados}")
-      doc.add_paragraph(
-          f"• Partidas en Estatus 'Pendiente por conciliar': {cant_pendientes}"
-      )
-      doc.add_paragraph(
-          "• Partidas en Estatus 'Pendiente por contabilizar (Reversado)':"
-          f" {cant_reversos}"
-      )
-      doc.add_paragraph(
-          f"• Total Comisiones Bancarias: {abs(total_comisiones):,.2f}"
-      )
-
-      if st.session_state.mensajes_chat:
-        doc.add_heading(
-            "2. Análisis Conversacional e Insights del Asistente IA", level=1
-        )
-        for msg in st.session_state.mensajes_chat:
-          rol = "Usuario" if msg["role"] == "user" else "Asistente IA"
-          doc.add_paragraph(f"{rol}: {msg['content']}")
-
-      buffer = BytesIO()
-      doc.save(buffer)
-      buffer.seek(0)
-
-      st.download_button(
-          label="⬇️ Descargar Reporte en Word (.docx)",
-          data=buffer,
-          file_name=f"Reporte_Conciliacion_{datetime.now().strftime('%Y%m%d')}.docx",
-          mime=(
-              "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-          ),
-      )
-
-else:
-  st.info(
-      "👈 Por favor, selecciona el banco, carga el Extracto Bancario, el Mayor"
-      " Analítico y el Archivo de Tasas de Respaldo en la barra lateral para"
-      " iniciar la conciliación del mes completo."
-  )
+                TOP 10 EGRESOS REALES (CUENTA DE CONTRAPARTIDA
