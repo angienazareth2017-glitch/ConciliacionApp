@@ -336,7 +336,7 @@ if archivo_banco and archivo_erp:
       df_erp["Monto_Clean"] / df_erp["Tasa_BCV"]
   ).round(2)
 
-  # --- CRUCE LOTE SIDE-BY-SIDE (UNA SOLA FILA HORIZONTAL) ---
+  # --- CRUCE SIDE-BY-SIDE USANDO VALORES ABSOLUTOS ---
   erp_usados = set()
   match_erp_indices = []
   estatus_banco_lista = []
@@ -353,7 +353,8 @@ if archivo_banco and archivo_erp:
       for idx_e, row_e in df_erp.iterrows():
         if idx_e in erp_usados:
           continue
-        if monto_b == row_e["Monto_Clean"] or monto_b == -row_e["Monto_Clean"]:
+        # Cruce robusto por valor absoluto para ignorar diferencias de signo banco/ERP
+        if abs(monto_b) == abs(row_e["Monto_Clean"]):
           encontrado = idx_e
           break
 
