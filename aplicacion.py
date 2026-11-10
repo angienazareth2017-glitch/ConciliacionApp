@@ -61,7 +61,6 @@ if "mensajes_chat" not in st.session_state:
   st.session_state.mensajes_chat = []
 
 
-@st.cache_data(ttl=86400)
 def obtener_tasa_bcv_api(fecha_str):
   try:
     url = f"https://pydolarvenezuela.org/api/v1/dollar/history/{fecha_str}"
@@ -159,7 +158,8 @@ def limpiar_tabla_financiera(archivo, banco):
 st.title("💼 Sistema Automatizado de Conciliación y Tesorería")
 st.markdown(
     "Cruza extractos bancarios contra mayores contables (SAP/ERP) en una sola"
-    " fila horizontal, clasificando tipos de movimiento de forma estricta."
+    " fila horizontal, con clasificación estricta de comisiones y"
+    " tesorería."
 )
 
 with st.sidebar:
@@ -327,7 +327,7 @@ if archivo_banco and archivo_erp:
       df_banco[col_monto_banco].apply(limpiar_monto).round(2)
   )
 
-  # --- CLASIFICACIÓN ESTRICTA DEL TIPO DE MOVIMIENTO EN EL BANCO ---
+  # --- CLASIFICACIÓN ESTRICTA Y BLINDADA DE COMISIONES (Banesco y otros) ---
   patron_comisiones = (
       r"com|comis|comision|comservmto|igtf|serv|servicio|sms|mto|mant"
       r"|mantenimiento|emision|estado de cuenta|canal"
