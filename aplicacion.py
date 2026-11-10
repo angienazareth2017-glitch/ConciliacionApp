@@ -576,4 +576,38 @@ if archivo_banco and archivo_erp:
       [
           "📊 Conciliación Fila por Fila y Consolidado",
           "💬 Asistente IA Financiero",
-          "📥 Exportar Reportes
+          "📥 Exportar Reportes",
+      ]
+  )
+
+  with tab1:
+    st.subheader("Resumen General de Tesorería y Cruce Fila por Fila")
+
+    col1, col2, col3, col4, col5 = st.columns(5)
+    col1.metric("Total Movimientos", total_movimientos)
+    col2.metric("Conciliados", cant_conciliados)
+    col3.metric("Pendientes Conciliar", cant_pendientes)
+    col4.metric("Partidas Reversadas (ERP)", cant_reversos)
+    col5.metric("Comisiones (Banco)", f"{abs(total_comisiones):,.2f}")
+
+    st.markdown("---")
+    st.subheader(
+        "🏆 Top 10 Egresos e Ingresos (Trazabilidad Real con ERP - Sin Anulados)"
+    )
+    col_t1, col_t2 = st.columns(2)
+
+    with col_t1:
+      st.markdown("#### 🔴 Top 10 Egresos")
+      if not top_10_egresos.empty:
+        cols_mostrar_e = [
+            c
+            for c in [
+                col_cta_contra,
+                col_nom_contra,
+                "Monto_Clean",
+                "Tasa_BCV",
+            ]
+            if c and c in top_10_egresos.columns
+        ]
+        st.dataframe(
+            top_10_egresos[cols_mostrar_e], use_container_
