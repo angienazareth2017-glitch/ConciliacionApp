@@ -687,6 +687,7 @@ if archivo_banco and archivo_erp:
         mime=(
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         ),
+        key="btn_descarga_excel_consolidado",
     )
 
   with tab2:
@@ -772,87 +773,4 @@ if archivo_banco and archivo_erp:
             response = client_or.chat.completions.create(
                 model="anthropic/claude-haiku-4.5",
                 messages=mensajes_api,
-                max_tokens=1000,
-            )
-            respuesta_ia = response.choices[0].message.content
-          except Exception as e:
-            respuesta_ia = (
-                f"Ocurrió un error al conectar con OpenRouter: {str(e)}"
-            )
-      else:
-        respuesta_ia = "Simulación de respuesta de IA (Configure su API Key)."
-
-      st.session_state.mensajes_chat.append(
-          {"role": "assistant", "content": respuesta_ia}
-      )
-      with st.chat_message("assistant"):
-        st.write(respuesta_ia)
-
-  with tab3:
-    st.subheader("📥 Exportar Reportes")
-    st.markdown("Descarga el reporte gerencial completo en formato Word.")
-
-    if st.button("📄 Generar Reporte Word"):
-      doc = Document()
-      doc.add_heading("Reporte Gerencial de Conciliación Bancaria", 0)
-      doc.add_paragraph(
-          f"Fecha de emisión: {datetime.now().strftime('%Y-%m-%d')}"
-      )
-      doc.add_paragraph(
-          "Periodo analizado: Mes completo según transacciones cargadas"
-      )
-
-      doc.add_heading("1. Resumen de Estatus de Conciliación", level=1)
-      doc.add_paragraph(f"• Total de Movimientos Analizados: {total_movimientos}")
-      doc.add_paragraph(f"• Partidas en Estatus 'Conciliado': {cant_conciliados}")
-      doc.add_paragraph(
-          f"• Partidas en Estatus 'Pendiente por conciliar': {cant_pendientes}"
-      )
-      doc.add_paragraph(
-          f"• Partidas Reversadas / Anuladas (ERP): {cant_reversos}"
-      )
-      doc.add_paragraph(
-          f"• Total Comisiones Bancarias (Banco): {abs(total_comisiones):,.2f}"
-      )
-
-      if not top_10_egresos.empty:
-        doc.add_heading(
-            "2. Resumen Top Egresos (Cuenta de Contrapartida)", level=1
-        )
-        for _, row in top_10_egresos.head(5).iterrows():
-          cta = (
-              row[col_cta_contra] if col_cta_contra in row else "N/D"
-          )
-          nom = (
-              row[col_nom_contra] if col_nom_contra in row else "N/D"
-          )
-          monto = row["Monto_Clean"]
-          doc.add_paragraph(f"• Cuenta: {cta} - {nom} | Monto: {monto:,.2f} Bs.")
-
-      if st.session_state.mensajes_chat:
-        doc.add_heading(
-            "3. Análisis Conversacional e Insights del Asistente IA", level=1
-        )
-        for msg in st.session_state.mensajes_chat:
-          rol = "Usuario" if msg["role"] == "user" else "Asistente IA"
-          doc.add_paragraph(f"{rol}: {msg['content']}")
-
-      buffer = BytesIO()
-      doc.save(buffer)
-      buffer.seek(0)
-
-      st.download_button(
-          label="⬇️ Descargar Consolidado Completo (4 Pestañas en Excel .xlsx)",
-          data=buffer,
-          file_name=f"Consolidado_Conciliacion_4_Pestanas_{datetime.now().strftime('%Y%m%d')}.xlsx",
-          mime=(
-              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-          ),
-      )
-
-else:
-  st.info(
-      "👈 Por favor, selecciona el banco, carga el Extracto Bancario, el Mayor"
-      " Analítico y el Archivo de Tasas de Respaldo en la barra lateral para"
-      " iniciar la conciliación del mes completo."
-  )
+                max_tokens=100
