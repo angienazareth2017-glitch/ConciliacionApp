@@ -149,7 +149,7 @@ def limpiar_tabla_financiera(archivo, banco):
         (c for c in df.columns if "fecha" in str(c).lower()), df.columns[0]
     )
     df = df[df[col_fecha].notna()]
-    # Formatear fechas para eliminar la hora y dejar solo YYYY-MM-DD
+    # Formatear fecha limpia sin hora (YYYY-MM-DD)
     df[col_fecha] = pd.to_datetime(df[col_fecha], errors="coerce").dt.strftime(
         "%Y-%m-%d"
     )
@@ -159,7 +159,8 @@ def limpiar_tabla_financiera(archivo, banco):
 st.title("💼 Sistema Automatizado de Conciliación y Tesorería")
 st.markdown(
     "Cruza extractos bancarios contra mayores contables (SAP/ERP) en una sola"
-    " fila horizontal, aplicando tasas BCV automáticas y fechas limpias."
+    " fila horizontal por transacción, aplicando tasas BCV automáticas y fechas"
+    " limpias."
 )
 
 with st.sidebar:
@@ -193,7 +194,7 @@ if archivo_banco and archivo_erp:
     st.error(f"Error al leer y limpiar los archivos: {e}")
     st.stop()
 
-  # Limpiar también las columnas de fecha adicionales en el ERP si existen
+  # Limpiar formato de fecha en todas las columnas de fecha del ERP
   for col in df_erp.columns:
     if "fecha" in str(col).lower():
       df_erp[col] = pd.to_datetime(df_erp[col], errors="coerce").dt.strftime(
@@ -308,9 +309,12 @@ if archivo_banco and archivo_erp:
     )
     cant_reversos = mask_reversos_erp.sum()
 
+  # Filtrar ERP y RESETEAR ÍNDICES para evitar desalineación en el match
   df_erp = df_erp[df_erp["Monto_Clean"] != 0.0].copy()
   if candidatos_desc_erp_full:
     df_erp = df_erp[~mask_reversos_erp].copy()
+  df_erp = df_erp.reset_index(drop=True)
+  df_banco = df_banco.reset_index(drop=True)
 
   df_banco["Monto_Clean"] = (
       df_banco[col_monto_banco].apply(limpiar_monto).round(2)
@@ -347,7 +351,7 @@ if archivo_banco and archivo_erp:
       df_erp["Monto_Clean"] / df_erp["Tasa_BCV"]
   ).round(2)
 
-  # --- CRUCE INTELIGENTE SIDE-BY-SIDE (MONTOS ABSOLUTOS Y COINCIDENCIA DE FECHAS) ---
+  # --- CRUCE SIDE-BY-SIDE PERFECTO (CON ÍNDICES LIMPIOS Y ABSOLUTOS) ---
   erp_usados = set()
   match_erp_indices = []
   estatus_banco_lista = []
@@ -362,7 +366,7 @@ if archivo_banco and archivo_erp:
       match_erp_indices.append(None)
     else:
       encontrado = None
-      # 1. Intento principal: Coincidencia exacta de monto absoluto y misma fecha
+      # 1. Match estricto: mismo monto absoluto y misma fecha exacta
       for idx_e, row_e in df_erp.iterrows():
         if idx_e in erp_usados:
           continue
@@ -373,7 +377,7 @@ if archivo_banco and archivo_erp:
           encontrado = idx_e
           break
 
-      # 2. Si no hay match por fecha exacta, buscar por coincidencia de monto absoluto en el mes
+      # 2. Match secundario: mismo monto absoluto en cualquier fecha del archivo
       if encontrado is None:
         for idx_e, row_e in df_erp.iterrows():
           if idx_e in erp_usados:
