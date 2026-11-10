@@ -421,6 +421,25 @@ if archivo_banco and archivo_erp:
         df_erp[col_monto_erp].apply(limpiar_monto).round(2)
     )
 
+  # FILTRO ESTRICTO: Excluir del ERP partidas anuladas, reversadas o con monto neto cero
+  df_erp = df_erp[df_erp["Monto_Clean"] != 0.0].copy()
+  candidatos_desc_erp = [
+      c
+      for c in df_erp.columns
+      if any(
+          k in str(c).lower() for k in ["desc", "concepto", "detalle", "nombre"]
+      )
+  ]
+  if candidatos_desc_erp:
+    col_desc_erp_eval = candidatos_desc_erp[0]
+    mask_no_anulados = (
+        ~df_erp[col_desc_erp_eval]
+        .astype(str)
+        .str.lower()
+        .str.contains("anul|cancel|revers|nula", na=False)
+    )
+    df_erp = df_erp[mask_no_anulados].copy()
+
   df_banco["Monto_Clean"] = (
       df_banco[col_monto_banco].apply(limpiar_monto).round(2)
   )
@@ -562,7 +581,7 @@ if archivo_banco and archivo_erp:
 
     st.markdown("---")
     st.subheader(
-        "🏆 Top 10 Egresos e Ingresos (Trazabilidad Real con ERP)"
+        "🏆 Top 10 Egresos e Ingresos (Trazabilidad Real con ERP - Sin Anulados)"
     )
     col_t1, col_t2 = st.columns(2)
 
@@ -583,7 +602,7 @@ if archivo_banco and archivo_erp:
             top_10_egresos[cols_mostrar_e], use_container_width=True
         )
       else:
-        st.info("No se registraron egresos en el período.")
+        st.info("No se registraron egresos válidos en el período.")
 
     with col_t2:
       st.markdown("#### 🟢 Top 10 Ingresos")
@@ -602,7 +621,7 @@ if archivo_banco and archivo_erp:
             top_10_ingresos[cols_mostrar_i], use_container_width=True
         )
       else:
-        st.info("No se registraron ingresos en el período.")
+        st.info("No se registraron ingresos válidos en el período.")
 
     st.markdown("---")
     st.subheader(
@@ -672,16 +691,13 @@ if archivo_banco and archivo_erp:
           " para activar el chat inteligente."
       )
 
-    # Renderizar historial de mensajes existente
     for msg in st.session_state.mensajes_chat:
       with st.chat_message(msg["role"]):
         st.write(msg["content"])
 
-    # Capturar la entrada del usuario de forma independiente y segura
     if pregunta := st.chat_input(
         "Ej: ¿Cuáles son las cuentas de contrapartida de mayor egreso?"
     ):
-      # Agregar y mostrar inmediatamente la pregunta del usuario
       st.session_state.mensajes_chat.append(
           {"role": "user", "content": pregunta}
       )
@@ -721,9 +737,9 @@ if archivo_banco and archivo_erp:
                 f"- Partidas Conciliadas: {cant_conciliados}\n"
                 f"- Partidas Pendientes: {cant_pendientes}\n"
                 f"- Total Comisiones: {abs(total_comisiones):,.2f} Bs.\n\n"
-                "TOP 10 EGRESOS REALES (CUENTA DE CONTRAPARTIDA Y MONTO):\n"
+                "TOP 10 EGRESOS REALES (EXCLUYENDO ANULADOS/REVERSADOS):\n"
                 f"{top_egresos_resumen}\n\n"
-                "TOP 10 INGRESOS REALES (CUENTA DE CONTRAPARTIDA Y MONTO):\n"
+                "TOP 10 INGRESOS REALES (EXCLUYENDO ANULADOS/REVERSADOS):\n"
                 f"{top_ingresos_resumen}"
             )
 
@@ -731,12 +747,12 @@ if archivo_banco and archivo_erp:
                 "Eres un auditor contable experto en tesorería corporativa en"
                 " Venezuela. Responde de forma directa, analítica y profesional"
                 " utilizando estrictamente los datos reales y Top 10"
-                " proporcionados. No inventes montos ni cuentas que no estén"
-                " aquí listados:\n\n"
+                " proporcionados (los cuales ya tienen excluidas las partidas"
+                " anuladas o reversadas). No inventes montos ni cuentas que no"
+                " estén aquí listados:\n\n"
                 + resumen_contextual
             )
 
-            # Construir la lista completa de mensajes para la API incluyendo el system prompt
             mensajes_api = [{"role": "system", "content": prompt_sistema}] + [
                 {"role": m["role"], "content": m["content"]}
                 for m in st.session_state.mensajes_chat
@@ -755,7 +771,6 @@ if archivo_banco and archivo_erp:
       else:
         respuesta_ia = "Simulación de respuesta de IA (Configure su API Key)."
 
-      # Guardar y renderizar la respuesta del asistente
       st.session_state.mensajes_chat.append(
           {"role": "assistant", "content": respuesta_ia}
       )
