@@ -221,16 +221,27 @@ if archivo_banco and archivo_erp:
       ),
       df_banco.columns[-1],
   )
-  col_desc_banco = next(
-      (
-          c
-          for c in df_banco.columns
-          if any(
-              k in str(c).lower()
-              for k in ["desc", "concepto", "referencia", "detalle"]
-          )
-      ),
-      df_banco.columns[0],
+
+  # Detección ultra robusta de la columna de descripción del banco
+  candidatos_desc_banco = [
+      c
+      for c in df_banco.columns
+      if any(
+          k in str(c).lower()
+          for k in [
+              "desc",
+              "concepto",
+              "detalle",
+              "observacion",
+              "referencia",
+              "comentario",
+          ]
+      )
+  ]
+  col_desc_banco = (
+      candidatos_desc_banco[0]
+      if candidatos_desc_banco
+      else df_banco.columns[1] if len(df_banco.columns) > 1 else df_banco.columns[0]
   )
 
   col_cargo_erp = next(
@@ -418,14 +429,18 @@ if archivo_banco and archivo_erp:
   cant_conciliados = len(erp_usados)
   cant_pendientes = total_movimientos - cant_conciliados
 
-  # --- FILTRADO ROBUSTO DE COMISIONES (Banesco y genéricos bancarios) ---
+  # --- FILTRADO GLOBAL MULTICOLUMNA DE COMISIONES Y GASTOS BANCARIOS ---
   patron_comisiones = (
-      r"com|comis|comision|igtf|serv|servicio|sms|mto|mant|mantenimiento|emision"
-      r"|estado de cuenta|canal"
+      r"com|comis|comision|comservmto|igtf|serv|servicio|sms|mto|mant"
+      r"|mantenimiento|emision|estado de cuenta|canal"
   )
-  mask_comisiones = df_banco[col_desc_banco].astype(str).str.contains(
-      patron_comisiones, case=False, na=False
-  )
+
+  # Evaluamos tanto la columna detectada como una concatenación de todo el texto de la fila del banco
+  def es_comision(row):
+    texto_fila = " ".join([str(val) for val in row.values]).lower()
+    return bool(re.search(patron_comisiones, texto_fila))
+
+  mask_comisiones = df_banco.apply(es_comision, axis=1)
   total_comisiones = df_banco[mask_comisiones]["Monto_Clean"].sum()
 
   top_10_egresos = (
