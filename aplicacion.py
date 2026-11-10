@@ -149,13 +149,17 @@ def limpiar_tabla_financiera(archivo, banco):
         (c for c in df.columns if "fecha" in str(c).lower()), df.columns[0]
     )
     df = df[df[col_fecha].notna()]
+    # Formatear fechas para eliminar la hora y dejar solo YYYY-MM-DD
+    df[col_fecha] = pd.to_datetime(df[col_fecha], errors="coerce").dt.strftime(
+        "%Y-%m-%d"
+    )
   return df.reset_index(drop=True)
 
 
 st.title("💼 Sistema Automatizado de Conciliación y Tesorería")
 st.markdown(
     "Cruza extractos bancarios contra mayores contables (SAP/ERP) en una sola"
-    " fila horizontal por transacción, aplicando tasas BCV automáticas."
+    " fila horizontal, aplicando tasas BCV automáticas y fechas limpias."
 )
 
 with st.sidebar:
@@ -188,6 +192,13 @@ if archivo_banco and archivo_erp:
   except Exception as e:
     st.error(f"Error al leer y limpiar los archivos: {e}")
     st.stop()
+
+  # Limpiar también las columnas de fecha adicionales en el ERP si existen
+  for col in df_erp.columns:
+    if "fecha" in str(col).lower():
+      df_erp[col] = pd.to_datetime(df_erp[col], errors="coerce").dt.strftime(
+          "%Y-%m-%d"
+      )
 
   dict_tasas_respaldo = {}
   tasa_default = 37.03
@@ -336,13 +347,14 @@ if archivo_banco and archivo_erp:
       df_erp["Monto_Clean"] / df_erp["Tasa_BCV"]
   ).round(2)
 
-  # --- CRUCE SIDE-BY-SIDE USANDO VALORES ABSOLUTOS ---
+  # --- CRUCE INTELIGENTE SIDE-BY-SIDE (MONTOS ABSOLUTOS Y COINCIDENCIA DE FECHAS) ---
   erp_usados = set()
   match_erp_indices = []
   estatus_banco_lista = []
 
   for idx_b, row_b in df_banco.iterrows():
     monto_b = row_b["Monto_Clean"]
+    fecha_b = str(row_b[col_fecha_banco])[:10]
     desc_b = str(row_b[col_desc_banco]).lower()
 
     if any(k in desc_b for k in ["anul", "cancel", "revers"]):
@@ -350,13 +362,25 @@ if archivo_banco and archivo_erp:
       match_erp_indices.append(None)
     else:
       encontrado = None
+      # 1. Intento principal: Coincidencia exacta de monto absoluto y misma fecha
       for idx_e, row_e in df_erp.iterrows():
         if idx_e in erp_usados:
           continue
-        # Cruce robusto por valor absoluto para ignorar diferencias de signo banco/ERP
-        if abs(monto_b) == abs(row_e["Monto_Clean"]):
+        fecha_e = (
+            str(row_e[col_fecha_erp])[:10] if col_fecha_erp else fecha_b
+        )
+        if abs(monto_b) == abs(row_e["Monto_Clean"]) and fecha_b == fecha_e:
           encontrado = idx_e
           break
+
+      # 2. Si no hay match por fecha exacta, buscar por coincidencia de monto absoluto en el mes
+      if encontrado is None:
+        for idx_e, row_e in df_erp.iterrows():
+          if idx_e in erp_usados:
+            continue
+          if abs(monto_b) == abs(row_e["Monto_Clean"]):
+            encontrado = idx_e
+            break
 
       if encontrado is not None:
         erp_usados.add(encontrado)
