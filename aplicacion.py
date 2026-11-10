@@ -159,8 +159,7 @@ def limpiar_tabla_financiera(archivo, banco):
 st.title("💼 Sistema Automatizado de Conciliación y Tesorería")
 st.markdown(
     "Cruza extractos bancarios contra mayores contables (SAP/ERP) en una sola"
-    " fila horizontal por transacción, aplicando tasas BCV automáticas y fechas"
-    " limpias."
+    " fila horizontal, clasificando tipos de movimiento de forma estricta."
 )
 
 with st.sidebar:
@@ -168,8 +167,8 @@ with st.sidebar:
   banco_seleccionado = st.selectbox(
       "Banco a Conciliar",
       [
-          "Banco Mercantil",
           "Banesco",
+          "Banco Mercantil",
           "BBVA Provincial",
           "Banco de Venezuela",
           "Otro / Genérico",
@@ -328,6 +327,27 @@ if archivo_banco and archivo_erp:
       df_banco[col_monto_banco].apply(limpiar_monto).round(2)
   )
 
+  # --- CLASIFICACIÓN ESTRICTA DEL TIPO DE MOVIMIENTO EN EL BANCO ---
+  patron_comisiones = (
+      r"com|comis|comision|comservmto|igtf|serv|servicio|sms|mto|mant"
+      r"|mantenimiento|emision|estado de cuenta|canal"
+  )
+
+
+  def clasificar_movimiento(row):
+    texto_fila = " ".join([str(val) for val in row.values]).lower()
+    monto = row["Monto_Clean"]
+
+    if bool(re.search(patron_comisiones, texto_fila)):
+      return "Comisiones"
+    elif monto > 0:
+      return "Ingresos"
+    else:
+      return "Egresos"
+
+
+  df_banco["Tipo_Movimiento"] = df_banco.apply(clasificar_movimiento, axis=1)
+
 
   def obtener_tasa_dual(fecha_val):
     f_dt = pd.to_datetime(fecha_val, errors="coerce")
@@ -419,28 +439,18 @@ if archivo_banco and archivo_erp:
   )
 
   total_movimientos = len(df_banco)
-  total_ingresos = df_banco[df_banco["Monto_Clean"] > 0][
+  total_ingresos = df_banco[df_banco["Tipo_Movimiento"] == "Ingresos"][
       "Monto_Clean"
   ].sum()
-  total_egresos = df_banco[df_banco["Monto_Clean"] < 0][
+  total_egresos = df_banco[df_banco["Tipo_Movimiento"] == "Egresos"][
+      "Monto_Clean"
+  ].sum()
+  total_comisiones = df_banco[df_banco["Tipo_Movimiento"] == "Comisiones"][
       "Monto_Clean"
   ].sum()
   total_general = df_banco["Monto_Clean"].sum()
   cant_conciliados = len(erp_usados)
   cant_pendientes = total_movimientos - cant_conciliados
-
-  # --- FILTRADO GLOBAL MULTICOLUMNA DE COMISIONES Y GASTOS BANCARIOS ---
-  patron_comisiones = (
-      r"com|comis|comision|comservmto|igtf|serv|servicio|sms|mto|mant"
-      r"|mantenimiento|emision|estado de cuenta|canal"
-  )
-
-  def es_comision(row):
-    texto_fila = " ".join([str(val) for val in row.values]).lower()
-    return bool(re.search(patron_comisiones, texto_fila))
-
-  mask_comisiones = df_banco.apply(es_comision, axis=1)
-  total_comisiones = df_banco[mask_comisiones]["Monto_Clean"].sum()
 
   top_10_egresos = (
       df_erp[df_erp["Monto_Clean"] < 0]
@@ -499,7 +509,9 @@ if archivo_banco and archivo_erp:
         st.info("Sin ingresos.")
 
     st.markdown("---")
-    st.subheader("📋 Consolidado en Una Sola Fila (Side-by-Side)")
+    st.subheader(
+        "📋 Consolidado en Una Sola Fila (Side-by-Side con Clasificación)"
+    )
     st.dataframe(df_consolidado, use_container_width=True)
 
     buffer_excel = BytesIO()
@@ -515,20 +527,20 @@ if archivo_banco and archivo_erp:
               "Total General",
               "Ingresos",
               "Egresos",
+              "Comisiones Bancarias",
               "Conciliados",
               "Pendientes",
               "Reversados",
-              "Comisiones",
           ],
           "Valor": [
               total_movimientos,
               total_general,
               total_ingresos,
               total_egresos,
+              total_comisiones,
               cant_conciliados,
               cant_pendientes,
               cant_reversos,
-              total_comisiones,
           ],
       }).to_excel(writer, index=False, sheet_name="Resumen_Gerencial")
     buffer_excel.seek(0)
@@ -546,7 +558,8 @@ if archivo_banco and archivo_erp:
   with tab2:
     st.subheader("💬 Asistente IA Financiero (Claude vía OpenRouter)")
     st.markdown(
-        "Interactúa con el motor de IA optimizado con contexto financiero real."
+        "Interactúa con el motor de IA optimizado con contexto financiero real y"
+        " clasificado."
     )
 
     for msg in st.session_state.mensajes_chat:
@@ -568,18 +581,18 @@ if archivo_banco and archivo_erp:
                 f"- Total Movimientos Bancarios: {total_movimientos}\n"
                 f"- Total Ingresos (Bs.): {total_ingresos:,.2f}\n"
                 f"- Total Egresos (Bs.): {total_egresos:,.2f}\n"
+                f"- Total Comisiones Bancarias: {abs(total_comisiones):,.2f}\n"
                 f"- Saldo Neto General: {total_general:,.2f}\n"
                 f"- Partidas Conciliadas: {cant_conciliados}\n"
                 f"- Partidas Pendientes: {cant_pendientes}\n"
                 f"- Partidas Reversadas (ERP): {cant_reversos}\n"
-                f"- Total Comisiones Bancarias: {abs(total_comisiones):,.2f}\n"
             )
 
             prompt_sistema = (
                 "Eres un auditor contable senior y analista de tesorería experto"
                 " en operaciones corporativas en Venezuela. Tu rol es responder"
-                " con precisión analítica, consultando y desglosando los datos"
-                " financieros provistos:\n\n" + resumen_ctx
+                " con absoluta precisión analítica, utilizando rigurosamente los"
+                " datos reales y clasificados provistos:\n\n" + resumen_ctx
             )
 
             mensajes_api = [{"role": "system", "content": prompt_sistema}]
