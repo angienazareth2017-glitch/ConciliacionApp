@@ -146,7 +146,6 @@ if not st.session_state.autenticado:
 
 @st.cache_data(ttl=86400)
 def obtener_tasa_bcv_api(fecha_str):
-  """Consulta la tasa oficial BCV histórica para la fecha dada mediante la API."""
   try:
     url = f"https://pydolarvenezuela.org/api/v1/dollar/history/{fecha_str}"
     response = requests.get(url, timeout=4)
@@ -159,7 +158,6 @@ def obtener_tasa_bcv_api(fecha_str):
 
 
 def cargar_diccionario_tasas_excel(archivo_tasas):
-  """Carga el archivo Excel de respaldo y crea un diccionario de fechas para búsqueda rápida."""
   dict_tasas = {}
   ultima_tasa = 37.03
   try:
@@ -216,7 +214,6 @@ def limpiar_monto(val):
 
 
 def limpiar_tabla_financiera(archivo, banco):
-  """Limpia metadatos corporativos y ajusta la cabecera según la estructura específica del banco."""
   if archivo.name.endswith(".csv"):
     df_raw = pd.read_csv(archivo, header=None)
   else:
@@ -283,9 +280,9 @@ def limpiar_tabla_financiera(archivo, banco):
 st.title("💼 Sistema Automatizado de Conciliación y Tesorería")
 st.markdown(
     "Cruza extractos bancarios contra mayores contables (SAP/ERP) fila por"
-    " fila para grandes volúmenes (700+ filas), aplicando tasas BCV automáticas"
-    " (API con respaldo en Excel), evaluando Cargo y Abono, y generando"
-    " reporte de 4 pestañas."
+    " fila para grandes volúmenes, aplicando tasas BCV automáticas (API con"
+    " respaldo en Excel), evaluando Cargo y Abono, y generando reporte de 4"
+    " pestañas."
 )
 
 with st.sidebar:
@@ -329,7 +326,6 @@ if archivo_banco and archivo_erp:
     st.error(f"Error al leer y limpiar los archivos subidos: {e}")
     st.stop()
 
-  # Cargar diccionario de tasas del archivo si existe
   dict_tasas_respaldo = {}
   tasa_default = 37.03
   if archivo_tasas is not None:
@@ -337,7 +333,6 @@ if archivo_banco and archivo_erp:
         archivo_tasas
     )
 
-  # Detección de columnas de Fecha y Monto en Banco
   col_fecha_banco = next(
       (c for c in df_banco.columns if "fecha" in str(c).lower()),
       df_banco.columns[0],
@@ -372,7 +367,6 @@ if archivo_banco and archivo_erp:
       df_banco.columns[0],
   )
 
-  # Detección precisa de columnas Cargo y Abono en el ERP
   col_cargo_erp = next(
       (
           c
@@ -390,7 +384,6 @@ if archivo_banco and archivo_erp:
       None,
   )
 
-  # Detección exacta de Cuenta de Contrapartida y Nombre en el ERP
   col_cta_contra = next(
       (
           c
@@ -427,13 +420,11 @@ if archivo_banco and archivo_erp:
         df_erp[col_monto_erp].apply(limpiar_monto).round(2)
     )
 
-  # Limpieza de montos del banco
   df_banco["Monto_Clean"] = (
       df_banco[col_monto_banco].apply(limpiar_monto).round(2)
   )
 
 
-  # Función Dual Automática: API BCV con respaldo de Excel
   def obtener_tasa_dual(fecha_val):
     f_dt = pd.to_datetime(fecha_val, errors="coerce")
     if pd.isna(f_dt):
@@ -469,7 +460,6 @@ if archivo_banco and archivo_erp:
       df_erp["Monto_Clean"] / df_erp["Tasa_BCV"]
   ).round(2)
 
-  # MOTOR DE CONCILIACIÓN FILA POR FILA OPTIMIZADO PARA MÁS DE 700 FILAS
   erp_usados = set()
   estatus_banco_lista = []
   match_erp_indices = []
@@ -501,7 +491,6 @@ if archivo_banco and archivo_erp:
 
   df_banco["Estatus_Conciliacion"] = estatus_banco_lista
 
-  # Construcción del consolidado lado a lado (Side-by-Side)
   df_erp_temp = df_erp.copy()
   df_erp_temp.columns = [f"ERP_{c}" for c in df_erp_temp.columns]
 
@@ -519,7 +508,6 @@ if archivo_banco and archivo_erp:
       axis=1,
   )
 
-  # Métricas generales
   total_movimientos = len(df_banco)
   total_ingresos = df_banco[df_banco["Monto_Clean"] > 0][
       "Monto_Clean"
@@ -543,7 +531,6 @@ if archivo_banco and archivo_erp:
   )
   total_comisiones = df_banco[mask_comisiones]["Monto_Clean"].sum()
 
-  # CÁLCULO DE TOP 10 REALES EN PYTHON
   df_egresos = df_erp[df_erp["Monto_Clean"] < 0].sort_values(
       by="Monto_Clean", ascending=True
   )
@@ -628,7 +615,6 @@ if archivo_banco and archivo_erp:
 
     st.dataframe(df_consolidado, use_container_width=True)
 
-    # CREACIÓN DEL EXCEL CON LAS 4 PESTAÑAS EXACTAS SOLICITADAS
     buffer_excel = BytesIO()
     with pd.ExcelWriter(buffer_excel, engine="openpyxl") as writer:
       df_consolidado.to_excel(
@@ -695,41 +681,3 @@ if archivo_banco and archivo_erp:
       st.session_state.mensajes_chat.append(
           {"role": "user", "content": pregunta}
       )
-      with st.chat_message("user"):
-        st.write(pregunta)
-
-      if ia_disponible and API_KEY_OR != "":
-        with st.spinner("Analizando información real con Claude..."):
-          try:
-            cols_ctx_e = [
-                c
-                for c in [col_cta_contra, col_nom_contra, "Monto_Clean"]
-                if c and c in top_10_egresos.columns
-            ]
-            cols_ctx_i = [
-                c
-                for c in [col_cta_contra, col_nom_contra, "Monto_Clean"]
-                if c and c in top_10_ingresos.columns
-            ]
-
-            top_egresos_resumen = (
-                top_10_egresos[cols_ctx_e].to_string(index=False)
-                if not top_10_egresos.empty
-                else "Sin datos"
-            )
-            top_ingresos_resumen = (
-                top_10_ingresos[cols_ctx_i].to_string(index=False)
-                if not top_10_ingresos.empty
-                else "Sin datos"
-            )
-
-            resumen_contextual = f"""
-                DATOS FINANCIEROS REALES Y VERIFICADOS (CONFIDENCIAL):
-                - Total de Movimientos: {total_movimientos}
-                - Total Ingresos: {total_ingresos:,.2f} Bs.
-                - Total Egresos: {total_egresos:,.2f} Bs.
-                - Partidas Conciliadas: {cant_conciliados}
-                - Partidas Pendientes: {cant_pendientes}
-                - Total Comisiones: {abs(total_comisiones):,.2f} Bs.
-
-                TOP 10 EGRESOS REALES (CUENTA DE CONTRAPARTIDA
