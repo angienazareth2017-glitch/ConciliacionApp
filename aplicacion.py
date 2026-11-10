@@ -418,8 +418,13 @@ if archivo_banco and archivo_erp:
   cant_conciliados = len(erp_usados)
   cant_pendientes = total_movimientos - cant_conciliados
 
+  # --- FILTRADO ROBUSTO DE COMISIONES (Banesco y genéricos bancarios) ---
+  patron_comisiones = (
+      r"com|comis|comision|igtf|serv|servicio|sms|mto|mant|mantenimiento|emision"
+      r"|estado de cuenta|canal"
+  )
   mask_comisiones = df_banco[col_desc_banco].astype(str).str.contains(
-      "comis|comisión|com|igtf|serv", case=False, na=False
+      patron_comisiones, case=False, na=False
   )
   total_comisiones = df_banco[mask_comisiones]["Monto_Clean"].sum()
 
@@ -544,7 +549,6 @@ if archivo_banco and archivo_erp:
       if ia_disponible and API_KEY_OR != "":
         with st.spinner("Claude analizando transacciones y contexto..."):
           try:
-            # Contexto analítico enriquecido para que la IA responda con total precisión
             resumen_ctx = (
                 f"DATOS GLOBALES DE TESORERÍA:\n"
                 f"- Total Movimientos Bancarios: {total_movimientos}\n"
