@@ -149,7 +149,6 @@ def limpiar_tabla_financiera(archivo, banco):
         (c for c in df.columns if "fecha" in str(c).lower()), df.columns[0]
     )
     df = df[df[col_fecha].notna()]
-    # Formatear fecha limpia sin hora (YYYY-MM-DD)
     df[col_fecha] = pd.to_datetime(df[col_fecha], errors="coerce").dt.strftime(
         "%Y-%m-%d"
     )
@@ -194,7 +193,6 @@ if archivo_banco and archivo_erp:
     st.error(f"Error al leer y limpiar los archivos: {e}")
     st.stop()
 
-  # Limpiar formato de fecha en todas las columnas de fecha del ERP
   for col in df_erp.columns:
     if "fecha" in str(col).lower():
       df_erp[col] = pd.to_datetime(df_erp[col], errors="coerce").dt.strftime(
@@ -309,7 +307,6 @@ if archivo_banco and archivo_erp:
     )
     cant_reversos = mask_reversos_erp.sum()
 
-  # Filtrar ERP y RESETEAR ÍNDICES para evitar desalineación en el match
   df_erp = df_erp[df_erp["Monto_Clean"] != 0.0].copy()
   if candidatos_desc_erp_full:
     df_erp = df_erp[~mask_reversos_erp].copy()
@@ -351,7 +348,6 @@ if archivo_banco and archivo_erp:
       df_erp["Monto_Clean"] / df_erp["Tasa_BCV"]
   ).round(2)
 
-  # --- CRUCE SIDE-BY-SIDE PERFECTO (CON ÍNDICES LIMPIOS Y ABSOLUTOS) ---
   erp_usados = set()
   match_erp_indices = []
   estatus_banco_lista = []
@@ -366,7 +362,6 @@ if archivo_banco and archivo_erp:
       match_erp_indices.append(None)
     else:
       encontrado = None
-      # 1. Match estricto: mismo monto absoluto y misma fecha exacta
       for idx_e, row_e in df_erp.iterrows():
         if idx_e in erp_usados:
           continue
@@ -377,7 +372,6 @@ if archivo_banco and archivo_erp:
           encontrado = idx_e
           break
 
-      # 2. Match secundario: mismo monto absoluto en cualquier fecha del archivo
       if encontrado is None:
         for idx_e, row_e in df_erp.iterrows():
           if idx_e in erp_usados:
@@ -531,12 +525,16 @@ if archivo_banco and archivo_erp:
     )
 
   with tab2:
-    st.subheader("💬 Asistente IA Financiero (Claude)")
+    st.subheader("💬 Asistente IA Financiero (Claude vía OpenRouter)")
+    st.markdown(
+        "Interactúa con el motor de IA optimizado con contexto financiero real."
+    )
+
     for msg in st.session_state.mensajes_chat:
       with st.chat_message(msg["role"]):
         st.write(msg["content"])
 
-    if pregunta := st.chat_input("Escribe tu pregunta financiera..."):
+    if pregunta := st.chat_input("Escribe tu consulta financiera o de auditoría..."):
       st.session_state.mensajes_chat.append(
           {"role": "user", "content": pregunta}
       )
@@ -544,34 +542,45 @@ if archivo_banco and archivo_erp:
         st.write(pregunta)
 
       if ia_disponible and API_KEY_OR != "":
-        with st.spinner("Analizando con Claude..."):
+        with st.spinner("Claude analizando transacciones y contexto..."):
           try:
+            # Contexto analítico enriquecido para que la IA responda con total precisión
             resumen_ctx = (
-                f"Total Movimientos: {total_movimientos}\nIngresos:"
-                f" {total_ingresos:,.2f}\nEgresos: {total_egresos:,.2f}\nReversados:"
-                f" {cant_reversos}\nComisiones: {abs(total_comisiones):,.2f}"
+                f"DATOS GLOBALES DE TESORERÍA:\n"
+                f"- Total Movimientos Bancarios: {total_movimientos}\n"
+                f"- Total Ingresos (Bs.): {total_ingresos:,.2f}\n"
+                f"- Total Egresos (Bs.): {total_egresos:,.2f}\n"
+                f"- Saldo Neto General: {total_general:,.2f}\n"
+                f"- Partidas Conciliadas: {cant_conciliados}\n"
+                f"- Partidas Pendientes: {cant_pendientes}\n"
+                f"- Partidas Reversadas (ERP): {cant_reversos}\n"
+                f"- Total Comisiones Bancarias: {abs(total_comisiones):,.2f}\n"
             )
-            mensajes_api = [
-                {
-                    "role": "system",
-                    "content": (
-                        "Eres un auditor contable experto en Venezuela.\n"
-                        + resumen_ctx
-                    ),
-                }
-            ]
+
+            prompt_sistema = (
+                "Eres un auditor contable senior y analista de tesorería experto"
+                " en operaciones corporativas en Venezuela. Tu rol es responder"
+                " con precisión analítica, consultando y desglosando los datos"
+                " financieros provistos:\n\n" + resumen_ctx
+            )
+
+            mensajes_api = [{"role": "system", "content": prompt_sistema}]
             for m in st.session_state.mensajes_chat:
               mensajes_api.append({"role": m["role"], "content": m["content"]})
+
             resp = client_or.chat.completions.create(
                 model="anthropic/claude-haiku-4.5",
                 messages=mensajes_api,
-                max_tokens=1000,
+                max_tokens=1500,
             )
             respuesta_ia = resp.choices[0].message.content
           except Exception as e:
-            respuesta_ia = f"Error en la IA: {e}"
+            respuesta_ia = f"Error al interactuar con el motor de IA: {e}"
       else:
-        respuesta_ia = "IA no configurada (Configure OpenRouter API Key)."
+        respuesta_ia = (
+            "⚠️ Motor de IA no configurado. Verifique su OPENROUTER_API_KEY en"
+            " los secretos de Streamlit."
+        )
 
       st.session_state.mensajes_chat.append(
           {"role": "assistant", "content": respuesta_ia}
@@ -580,23 +589,65 @@ if archivo_banco and archivo_erp:
         st.write(respuesta_ia)
 
   with tab3:
-    st.subheader("📥 Exportar Reporte Word")
-    if st.button("📄 Generar Reporte Word", key="btn_word"):
+    st.subheader("📥 Exportar Reportes Gerenciales")
+    st.markdown(
+        "Genera un reporte en formato Word con el resumen ejecutivo y el"
+        " historial completo de interacciones con el Asistente IA."
+    )
+
+    if st.button("📄 Generar Reporte Word Completo", key="btn_word"):
       doc = Document()
-      doc.add_heading("Reporte Gerencial de Conciliación", 0)
+      doc.add_heading("Reporte Gerencial de Conciliación y Tesorería", 0)
       doc.add_paragraph(
-          f"Fecha: {datetime.now().strftime('%Y-%m-%d')}"
-          f"\nMovimientos: {total_movimientos} | Conciliados:"
-          f" {cant_conciliados} | Reversados: {cant_reversos}"
-          f"\nComisiones: {abs(total_comisiones):,.2f}"
+          f"Fecha de emisión: {datetime.now().strftime('%Y-%m-%d')}"
       )
+      doc.add_paragraph(
+          f"Banco seleccionado: {banco_seleccionado} | Moneda base:"
+          f" {moneda_base}"
+      )
+
+      doc.add_heading("1. Métricas Globales de Conciliación", level=1)
+      doc.add_paragraph(
+          f"• Total de Movimientos Analizados: {total_movimientos}"
+      )
+      doc.add_paragraph(
+          f"• Partidas en Estatus 'Conciliado': {cant_conciliados}"
+      )
+      doc.add_paragraph(
+          f"• Partidas en Estatus 'Pendiente por conciliar': {cant_pendientes}"
+      )
+      doc.add_paragraph(
+          f"• Partidas Reversadas / Anuladas (ERP): {cant_reversos}"
+      )
+      doc.add_paragraph(
+          f"• Total Ingresos: {total_ingresos:,.2f} Bs. (Equivalente en"
+          f" {moneda_base})"
+      )
+      doc.add_paragraph(
+          f"• Total Egresos: {total_egresos:,.2f} Bs. (Equivalente en"
+          f" {moneda_base})"
+      )
+      doc.add_paragraph(
+          f"• Total Comisiones Bancarias: {abs(total_comisiones):,.2f} Bs."
+      )
+
+      if st.session_state.mensajes_chat:
+        doc.add_heading(
+            "2. Historial de Interacciones y Consultas con el Asistente IA",
+            level=1,
+        )
+        for msg in st.session_state.mensajes_chat:
+          rol = "Pregunta del Auditor" if msg["role"] == "user" else "Respuesta de la IA"
+          doc.add_paragraph(f"{rol}: {msg['content']}")
+
       buffer_w = BytesIO()
       doc.save(buffer_w)
       buffer_w.seek(0)
+
       st.download_button(
-          label="⬇️ Descargar Word (.docx)",
+          label="⬇️ Descargar Reporte Word (.docx)",
           data=buffer_w,
-          file_name=f"Reporte_{datetime.now().strftime('%Y%m%d')}.docx",
+          file_name=f"Reporte_Gerencial_{datetime.now().strftime('%Y%m%d')}.docx",
           mime=(
               "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
           ),
