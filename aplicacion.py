@@ -327,10 +327,11 @@ if archivo_banco and archivo_erp:
       df_banco[col_monto_banco].apply(limpiar_monto).round(2)
   )
 
-  # --- CLASIFICACIÓN ESTRICTA Y BLINDADA DE COMISIONES (Banesco y otros) ---
+  # --- FILTRO EXCLUSIVO Y PRECISO DE COMISIONES (Banesco / General) ---
+  # Se ajusta para buscar exactamente prefijos de comisiones sin atrapar pagos o gastos operativos generales
   patron_comisiones = (
-      r"com|comis|comision|comservmto|igtf|serv|servicio|sms|mto|mant"
-      r"|mantenimiento|emision|estado de cuenta|canal"
+      r"^(com\b|comis|comision|comservmto|comserv|emision de estado de"
+      r" cuenta|comision servicio sms)"
   )
 
 
