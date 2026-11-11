@@ -1,6 +1,5 @@
 from datetime import datetime
 from io import BytesIO
-import re
 import openpyxl
 import pandas as pd
 import requests
@@ -61,6 +60,7 @@ if "mensajes_chat" not in st.session_state:
   st.session_state.mensajes_chat = []
 
 
+@st.cache_data(ttl=86400)
 def obtener_tasa_bcv_api(fecha_str):
   try:
     url = f"https://pydolarvenezuela.org/api/v1/dollar/history/{fecha_str}"
@@ -158,8 +158,7 @@ def limpiar_tabla_financiera(archivo, banco):
 st.title("💼 Sistema Automatizado de Conciliación y Tesorería")
 st.markdown(
     "Cruza extractos bancarios contra mayores contables (SAP/ERP) en una sola"
-    " fila horizontal, con clasificación estricta de comisiones y"
-    " tesorería."
+    " fila horizontal, con clasificación estricta por `Tipo_Movimiento`."
 )
 
 with st.sidebar:
@@ -327,19 +326,22 @@ if archivo_banco and archivo_erp:
       df_banco[col_monto_banco].apply(limpiar_monto).round(2)
   )
 
-  # --- FILTRO EXCLUSIVO Y PRECISO DE COMISIONES (Banesco / General) ---
-  # Se ajusta para buscar exactamente prefijos de comisiones sin atrapar pagos o gastos operativos generales
-  patron_comisiones = (
-      r"^(com\b|comis|comision|comservmto|comserv|emision de estado de"
-      r" cuenta|comision servicio sms)"
-  )
-
 
   def clasificar_movimiento(row):
-    texto_fila = " ".join([str(val) for val in row.values]).lower()
+    desc = str(row[col_desc_banco]).lower()
     monto = row["Monto_Clean"]
-
-    if bool(re.search(patron_comisiones, texto_fila)):
+    if any(
+        k in desc
+        for k in [
+            "com",
+            "comis",
+            "comision",
+            "comservmto",
+            "emision de estado de cuenta",
+            "sms",
+            "canal",
+        ]
+    ):
       return "Comisiones"
     elif monto > 0:
       return "Ingresos"
@@ -380,6 +382,7 @@ if archivo_banco and archivo_erp:
       df_erp["Monto_Clean"] / df_erp["Tasa_BCV"]
   ).round(2)
 
+  # --- MOTOR DE CRUCE SIDE-BY-SIDE (TODAS LAS FILAS) ---
   erp_usados = set()
   match_erp_indices = []
   estatus_banco_lista = []
@@ -511,7 +514,8 @@ if archivo_banco and archivo_erp:
 
     st.markdown("---")
     st.subheader(
-        "📋 Consolidado en Una Sola Fila (Side-by-Side con Clasificación)"
+        "📋 Consolidado en Una Sola Fila (Side-by-Side con Clasificación"
+        " Directa)"
     )
     st.dataframe(df_consolidado, use_container_width=True)
 
