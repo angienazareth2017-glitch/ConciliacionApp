@@ -3,7 +3,7 @@ import streamlit as st
 st.set_page_config(page_title="Acceso al Sistema", page_icon="🔒", layout="centered")
 
 # Recupera la contraseña desde los secretos de Streamlit (o usa una por defecto)
-password_correcta = st.secrets.get("PASSWORD_ACCESO", "Ruben.1994.Juan")
+password_correcta = st.secrets.get("PASSWORD_ACCESO",)
 
 if "autenticado" not in st.session_state:
   st.session_state.autenticado = False
