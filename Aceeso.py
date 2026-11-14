@@ -1,26 +1,38 @@
 import streamlit as st
 
-st.set_page_config(page_title="Acceso al Sistema", page_icon="🔒", layout="centered")
+st.set_page_config(
+    page_title="Sistema de Conciliación y Tesorería",
+    page_icon="🔒",
+    layout="wide",
+)
 
-# Recupera la contraseña desde los secretos de Streamlit (o usa una por defecto)
-password_correcta = st.secrets.get("PASSWORD_ACCESO",)
-
+# Inicializamos el estado de autenticación
 if "autenticado" not in st.session_state:
   st.session_state.autenticado = False
 
+# Pantalla de Login (si no está autenticado)
 if not st.session_state.autenticado:
   st.title("🔒 Acceso al Sistema de Conciliación")
-  st.markdown("Por favor, ingrese su contraseña para acceder al sistema.")
+  st.markdown("Por favor, ingrese su contraseña para continuar.")
+
+  # Obtenemos la contraseña exclusivamente desde los secrets de Streamlit Cloud
+  password_correcta = st.secrets.get("PASSWORD_ACCESO", "")
 
   password = st.text_input("Contraseña:", type="password")
 
   if st.button("Ingresar"):
-    if password == password_correcta:
+    if password and password == password_correcta:
       st.session_state.autenticado = True
       st.rerun()
     else:
       st.error("Contraseña incorrecta. Intente nuevamente.")
+
+  # Detenemos la ejecución aquí para que no muestre el resto de la app
   st.stop()
 
-# Si ya está autenticado, aquí continúa tu aplicación principal
-st.success("¡Acceso concedido!")
+# =============================================================================
+# A PARTIR DE AQUÍ COMIENZA TU APLICACIÓN PRINCIPAL (Solo visible al autenticarse)
+# =============================================================================
+st.success("¡Bienvenido al sistema!")
+
+# Coloca aquí el resto de tu código de conciliación y procesamiento de archivos...
