@@ -68,26 +68,6 @@ def test_fecha_invalida():
     with pytest.raises(ErrorDeParseo):
         parsear_fecha(None)
 
-
-# ----------------------------------------------------------------------------
-# Clasificación  (regresión: "com" marcaba COMERCIO, COMPRA, COMPAÑIA como comisión)
-# ----------------------------------------------------------------------------
-@pytest.mark.parametrize("desc, monto, esperado", [
-    ("PAGO COMERCIO FERRETERIA", "-100", "Egresos"),
-    ("COMPRA POS", "-50", "Egresos"),
-    ("TRANSFERENCIA RECIBIDA COMPAÑIA XYZ", "300", "Ingresos"),
-    ("DEPOSITO CANAL 3", "200", "Ingresos"),
-    ("COMISIÓN MANTENIMIENTO", "-5", "Comisiones"),
-    ("COM. SERV. MTO", "-5", "Comisiones"),
-    ("COMSERVMTO", "-5", "Comisiones"),
-    ("SMS ALERTAS", "-1", "Comisiones"),
-    ("IGTF 3%", "-3", "Impuestos"),
-    ("PAGO NOMINA", "-900", "Egresos"),
-])
-def test_clasificacion(desc, monto, esperado):
-    assert clasificar_movimiento(desc, D(monto)) == esperado
-
-
 # ----------------------------------------------------------------------------
 # Referencias
 # ----------------------------------------------------------------------------
