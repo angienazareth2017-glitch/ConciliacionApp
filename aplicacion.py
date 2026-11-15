@@ -222,7 +222,9 @@ elif menu_proceso == "Dashboard":
 
     # Banner de bienvenida estilo Opción 2
     st.success(
-        "🚀 **Sistema de Conciliación Inteligente Activo**\n\n*Bienvenido al entorno de trabajo multimoneda. Utilice el menú lateral para iniciar la importación o consultar las tasas.*",
+        "🚀 **Sistema de Conciliación Inteligente Activo**
+
+*Bienvenido al entorno de trabajo multimoneda. Utilice el menú lateral para iniciar la importación o consultar las tasas.*",
         icon="💼",
     )
 
@@ -341,7 +343,7 @@ elif menu_proceso == "Importar":
         except Exception as err:
             st.error(f"Error al procesar el archivo cargado: {err}")
 
-# --- VISTA: MOTOR DE CONCILIACIÓN CON EXCEL & ASISTENTE IA ---
+# --- VISTA: MOTOR DE CONCILIACIÓN CON EXCEL COMPLETO & ASISTENTE IA ---
 elif menu_proceso == "Conciliación":
     st.title("⚡ Motor de Cruce y Propuestas Automáticas")
     st.markdown("Cruce inteligente de partidas aplicando las reglas del motor (C1, C2, C3, C4).")
@@ -383,17 +385,17 @@ elif menu_proceso == "Conciliación":
         kpi4.metric("Libros Pendiente", datos_resumen.get("libros_pendiente", 0))
 
         # =====================================================================
-        # EXPORTAR REPORTE CONSOLIDADO EN EXCEL (Con Tasas BCV y Marcas)
+        # EXPORTAR REPORTE CONSOLIDADO EN EXCEL (TODAS LAS PARTIDAS: CONCILIADAS + PENDIENTES)
         # =====================================================================
         st.markdown("---")
         st.subheader("📥 Exportar Reporte Consolidado")
 
-        if st.button("Generar Archivo Excel Consolidado"):
+        if st.button("Generar Archivo Excel Consolidado (Completo)"):
             try:
                 filas_excel = []
                 tabla_t = st.session_state.tabla_tasas
 
-                # 1. Procesar pares cerrados
+                # 1. Procesar pares cerrados (Conciliados)
                 for par in res.pares:
                     b_movs = par.banco
                     l_movs = par.libros
@@ -404,7 +406,6 @@ elif menu_proceso == "Conciliación":
                         
                         f_op = mb.fecha if mb else (ml.fecha if ml else None)
                         
-                        # Buscar tasa BCV USD para la fecha
                         tasa_usd_val = 0.0
                         monto_usd = 0.0
                         if f_op:
@@ -430,6 +431,56 @@ elif menu_proceso == "Conciliación":
                             "Monto Convertido USD": monto_usd,
                         })
 
+                # 2. Procesar partidas pendientes del Banco (Por conciliar Banco)
+                for mb in res.banco_pendiente:
+                    tasa_usd_val = 0.0
+                    monto_usd = 0.0
+                    try:
+                        t_obj = tabla_t.obtener(mb.fecha, "USD", tipo="BCV")
+                        tasa_usd_val = float(t_obj.valor)
+                        monto_usd = round(float(mb.monto) / tasa_usd_val, 2) if tasa_usd_val > 0 else 0.0
+                    except Exception:
+                        pass
+
+                    filas_excel.append({
+                        "Banco - Fecha": mb.fecha,
+                        "Banco - Descripción": mb.descripcion,
+                        "Banco - Referencia": mb.referencia,
+                        "Banco - Monto": float(mb.monto),
+                        "Mayor - Fecha": "",
+                        "Mayor - Descripción": "",
+                        "Mayor - Referencia": "",
+                        "Mayor - Monto": 0.0,
+                        "Marca Conciliación": "Por conciliar (Banco)",
+                        "Tasa BCV USD": tasa_usd_val,
+                        "Monto Convertido USD": monto_usd,
+                    })
+
+                # 3. Procesar partidas pendientes de Libros (Por conciliar Libros)
+                for ml in res.libros_pendiente:
+                    tasa_usd_val = 0.0
+                    monto_usd = 0.0
+                    try:
+                        t_obj = tabla_t.obtener(ml.fecha, "USD", tipo="BCV")
+                        tasa_usd_val = float(t_obj.valor)
+                        monto_usd = round(float(ml.monto) / tasa_usd_val, 2) if tasa_usd_val > 0 else 0.0
+                    except Exception:
+                        pass
+
+                    filas_excel.append({
+                        "Banco - Fecha": "",
+                        "Banco - Descripción": "",
+                        "Banco - Referencia": "",
+                        "Banco - Monto": 0.0,
+                        "Mayor - Fecha": ml.fecha,
+                        "Mayor - Descripción": ml.descripcion,
+                        "Mayor - Referencia": ml.referencia,
+                        "Mayor - Monto": float(ml.monto),
+                        "Marca Conciliación": "Por conciliar (Libros)",
+                        "Tasa BCV USD": tasa_usd_val,
+                        "Monto Convertido USD": monto_usd,
+                    })
+
                 df_reporte = pd.DataFrame(filas_excel)
 
                 # Guardar en memoria con openpyxl
@@ -439,17 +490,17 @@ elif menu_proceso == "Conciliación":
                 processed_data = output.getvalue()
 
                 st.download_button(
-                    label="📥 Descargar Reporte en Excel",
+                    label="📥 Descargar Reporte Completo en Excel",
                     data=processed_data,
                     file_name="Reporte_Conciliacion_Consolidado.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 )
-                st.success("¡Reporte Excel generado correctamente para descarga!")
+                st.success("¡Reporte Excel completo generado correctamente para descarga!")
             except Exception as e:
                 st.error(f"Error al generar el Excel: {e}")
 
         # =====================================================================
-        # OPCIÓN 1: ASISTENTE DE IA INTEGRADO
+        # OPCIÓN 1: ASISTENTE DE IA INTEGRADO (CONECTADO A OPENROUTER)
         # =====================================================================
         st.markdown("---")
         with st.expander("🤖 Asistente IA para Análisis de Conciliación (Opción 1)", expanded=False):
@@ -464,11 +515,15 @@ elif menu_proceso == "Conciliación":
                         st.error("La librería `openai` no está instalada o configurada.")
                     else:
                         try:
-                            client = OpenAI(api_key=st.secrets.get("OPENAI_API_KEY", ""))
+                            # Configuración del cliente apuntando a OpenRouter
+                            client = OpenAI(
+                                api_key=st.secrets.get("OPENAI_API_KEY", ""),
+                                base_url=st.secrets.get("OPENAI_BASE_URL", "https://openrouter.ai/api/v1"),
+                            )
                             contexto = f"Pares cerrados: {len(res.pares)}, Banco pendiente: {len(res.banco_pendiente)}, Libros pendiente: {len(res.libros_pendiente)}"
                             
                             response = client.chat.completions.create(
-                                model="gpt-4o-mini",
+                                model="openai/gpt-4o-mini",
                                 messages=[
                                     {
                                         "role": "system",
@@ -476,13 +531,14 @@ elif menu_proceso == "Conciliación":
                                     },
                                     {
                                         "role": "user",
-                                        "content": f"Contexto financiero actual: {contexto}\nPregunta del analista: {pregunta_ai}",
+                                        "content": f"Contexto financiero actual: {contexto}
+Pregunta del analista: {pregunta_ai}",
                                     },
                                 ],
                             )
                             st.success(response.choices[0].message.content)
                         except Exception as ai_err:
-                            st.error(f"Error al conectar con la API de OpenAI (Verifique su API Key en st.secrets): {ai_err}")
+                            st.error(f"Error al conectar con la API (Verifique su API Key y base_url en st.secrets): {ai_err}")
 
         if res.sugerencias:
             st.markdown("### 💡 Sugerencias pendientes de aprobación (C3 / C4)")
