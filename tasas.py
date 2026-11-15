@@ -1,6 +1,5 @@
 import pandas as pd
 import streamlit as st
-from tasas import TablaTasas, TasaNoDisponible
 
 # Suponiendo que ya estás dentro de la app principal autenticada...
 st.subheader("📁 Carga Masiva de Tasas BCV desde Excel")
