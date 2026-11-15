@@ -520,17 +520,24 @@ elif menu_proceso == "Conciliación":
                             )
                             contexto = f"Pares cerrados: {len(res.pares)}, Banco pendiente: {len(res.banco_pendiente)}, Libros pendiente: {len(res.libros_pendiente)}"
                             
-                            response = client.chat.completions.create(
+      response = client.chat.completions.create(
                                 model="openai/gpt-4o-mini",
                                 messages=[
                                     {
                                         "role": "system",
-                                        "content": "Eres un asistente experto en contabilidad y conciliaciones bancarias para empresas en Venezuela. Analiza con precisión los datos y responde de forma ejecutiva.",
+                                        "content": (
+                                            "Eres un asistente experto en"
+                                            " contabilidad y conciliaciones"
+                                            " bancarias para empresas en"
+                                            " Venezuela. Analiza con"
+                                            " precisión los datos y responde"
+                                            " de forma ejecutiva."
+                                        ),
                                     },
                                     {
                                         "role": "user",
-                                        "content": f"Contexto financiero actual: {contexto}
-Pregunta del analista: {pregunta_ai}",
+                                        "content": f"""Contexto financiero actual: {contexto}
+Pregunta del analista: {pregunta_ai}""",
                                     },
                                 ],
                             )
