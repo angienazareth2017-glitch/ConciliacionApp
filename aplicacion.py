@@ -1,15 +1,16 @@
 """
 aplicacion.py - Aplicación web principal en Streamlit para el 
-Sistema de Conciliación y Tesorería Multidivisa con Asistente IA, Reporte Excel y Historial Persistente.
+Sistema de Conciliación y Tesorería Multidivisa con Asistente IA conectado a datos reales,
+Descarga de Análisis IA, Reporte Excel Completo y Historial Persistente.
 """
 from __future__ import annotations
 
 import io
 import json
 import os
+from datetime import datetime
 import pandas as pd
 import streamlit as st
-from datetime import datetime
 
 # Importación de motores lógicos locales
 from conciliar import (
@@ -38,6 +39,7 @@ st.set_page_config(
 
 HISTORIAL_FILE = "historial_conciliaciones.json"
 
+
 def cargar_historial_disco() -> list[dict]:
     if os.path.exists(HISTORIAL_FILE):
         try:
@@ -47,6 +49,7 @@ def cargar_historial_disco() -> list[dict]:
             return []
     return []
 
+
 def guardar_en_historial(resumen_dict: dict) -> None:
     historial = cargar_historial_disco()
     historial.insert(0, resumen_dict)
@@ -55,6 +58,226 @@ def guardar_en_historial(resumen_dict: dict) -> None:
             json.dump(historial, f, ensure_ascii=False, indent=4)
     except Exception:
         pass
+
+
+def construir_dataframe_consolidado(res, tabla_t) -> pd.DataFrame:
+    """
+    Construye el DataFrame consolidado completo (Conciliados, Pendientes Banco,
+    Pendientes Libros y Asientos Anulados) con los textos literales de origen.
+    """
+    filas_excel = []
+
+    # 1. Pares cerrados (Conciliados)
+    for par in res.pares:
+        b_movs = par.banco
+        l_movs = par.libros
+        max_len = max(len(b_movs), len(l_movs))
+        for i in range(max_len):
+            mb = b_movs[i] if i < len(b_movs) else None
+            ml = l_movs[i] if i < len(l_movs) else None
+            f_op = mb.fecha if mb else (ml.fecha if ml else None)
+
+            tasa_usd_val = 0.0
+            monto_usd = 0.0
+            if f_op:
+                try:
+                    t_obj = tabla_t.obtener(f_op, "USD", tipo="BCV")
+                    tasa_usd_val = float(t_obj.valor)
+                    monto_base = float(ml.monto) if ml else (float(mb.monto) if mb else 0.0)
+                    monto_usd = round(monto_base / tasa_usd_val, 2) if tasa_usd_val > 0 else 0.0
+                except Exception:
+                    pass
+
+            filas_excel.append({
+                "Banco - Fecha": mb.fecha if mb else "",
+                "Banco - Descripción": mb.descripcion if mb else "",
+                "Banco - Referencia": mb.referencia if mb else "",
+                "Banco - Monto": float(mb.monto) if mb else 0.0,
+                "Mayor - Fecha": ml.fecha if ml else "",
+                "Mayor - Descripción": ml.descripcion if ml else "",
+                "Mayor - Referencia": ml.referencia if ml else "",
+                "Mayor - Monto": float(ml.monto) if ml else 0.0,
+                "Marca Conciliación": f"Conciliado ({par.regla})",
+                "Tasa BCV USD": tasa_usd_val,
+                "Monto Convertido USD": monto_usd,
+            })
+
+    # 2. Partidas pendientes del Banco
+    for mb in res.banco_pendiente:
+        tasa_usd_val = 0.0
+        monto_usd = 0.0
+        try:
+            t_obj = tabla_t.obtener(mb.fecha, "USD", tipo="BCV")
+            tasa_usd_val = float(t_obj.valor)
+            monto_usd = round(float(mb.monto) / tasa_usd_val, 2) if tasa_usd_val > 0 else 0.0
+        except Exception:
+            pass
+
+        filas_excel.append({
+            "Banco - Fecha": mb.fecha,
+            "Banco - Descripción": mb.descripcion,
+            "Banco - Referencia": mb.referencia,
+            "Banco - Monto": float(mb.monto),
+            "Mayor - Fecha": "",
+            "Mayor - Descripción": "",
+            "Mayor - Referencia": "",
+            "Mayor - Monto": 0.0,
+            "Marca Conciliación": "Por conciliar (Banco)",
+            "Tasa BCV USD": tasa_usd_val,
+            "Monto Convertido USD": monto_usd,
+        })
+
+    # 3. Partidas pendientes de Libros
+    for ml in res.libros_pendiente:
+        tasa_usd_val = 0.0
+        monto_usd = 0.0
+        try:
+            t_obj = tabla_t.obtener(ml.fecha, "USD", tipo="BCV")
+            tasa_usd_val = float(t_obj.valor)
+            monto_usd = round(float(ml.monto) / tasa_usd_val, 2) if tasa_usd_val > 0 else 0.0
+        except Exception:
+            pass
+
+        filas_excel.append({
+            "Banco - Fecha": "",
+            "Banco - Descripción": "",
+            "Banco - Referencia": "",
+            "Banco - Monto": 0.0,
+            "Mayor - Fecha": ml.fecha,
+            "Mayor - Descripción": ml.descripcion,
+            "Mayor - Referencia": ml.referencia,
+            "Mayor - Monto": float(ml.monto),
+            "Marca Conciliación": "Por conciliar (Libros)",
+            "Tasa BCV USD": tasa_usd_val,
+            "Monto Convertido USD": monto_usd,
+        })
+
+    # 4. Asientos Anulados detectados en Libros
+    for ml, marca_anulado in getattr(res, "libros_anulados", []):
+        tasa_usd_val = 0.0
+        monto_usd = 0.0
+        try:
+            t_obj = tabla_t.obtener(ml.fecha, "USD", tipo="BCV")
+            tasa_usd_val = float(t_obj.valor)
+            monto_usd = round(float(ml.monto) / tasa_usd_val, 2) if tasa_usd_val > 0 else 0.0
+        except Exception:
+            pass
+
+        filas_excel.append({
+            "Banco - Fecha": "",
+            "Banco - Descripción": "",
+            "Banco - Referencia": "",
+            "Banco - Monto": 0.0,
+            "Mayor - Fecha": ml.fecha,
+            "Mayor - Descripción": ml.descripcion,
+            "Mayor - Referencia": ml.referencia,
+            "Mayor - Monto": float(ml.monto),
+            "Marca Conciliación": marca_anulado,
+            "Tasa BCV USD": tasa_usd_val,
+            "Monto Convertido USD": monto_usd,
+        })
+
+    return pd.DataFrame(filas_excel)
+
+
+def construir_contexto_ia_real(df_rep: pd.DataFrame, res) -> str:
+    """
+    Construye un contexto detallado basado EXCLUSIVAMENTE en los datos reales
+    cargados por el usuario, respetando el texto literal de 'Mayor - Descripción'
+    y 'Banco - Descripción'.
+    """
+    if df_rep.empty:
+        return "No hay movimientos en el reporte."
+
+    lineas = []
+    lineas.append("=== RESUMEN GENERAL EXACTO ===")
+    lineas.append(f"- Pares conciliados: {len(res.pares)}")
+    lineas.append(f"- Pendientes en Banco: {len(res.banco_pendiente)}")
+    lineas.append(f"- Pendientes en Libros: {len(res.libros_pendiente)}")
+    lineas.append(f"- Asientos Anulados aislados: {len(getattr(res, 'libros_anulados', []))}")
+
+    # Agrupación real por el escrito literal de 'Mayor - Descripción' (excluyendo anulados)
+    df_mayor_activos = df_rep[
+        (df_rep["Mayor - Descripción"].astype(str).str.strip() != "")
+        & (df_rep["Marca Conciliación"] != "Asiento Anulado")
+    ].copy()
+
+    if not df_mayor_activos.empty:
+        lineas.append("\n=== DISTRIBUCIÓN Y TOP POR 'Mayor - Descripción' (ESCRITO LITERAL DE ORIGEN, SIN ANULADOS) ===")
+        # Egresos / Salidas en Mayor
+        egresos_m = df_mayor_activos[df_mayor_activos["Mayor - Monto"] < 0].copy()
+        if not egresos_m.empty:
+            egresos_m["Monto_Abs"] = egresos_m["Mayor - Monto"].abs()
+            total_eg_m = egresos_m["Monto_Abs"].sum()
+            grp_eg = (
+                egresos_m.groupby("Mayor - Descripción", as_index=False)
+                .agg(
+                    Cantidad=("Monto_Abs", "count"),
+                    Total_VES=("Monto_Abs", "sum"),
+                    Total_USD=("Monto Convertido USD", lambda s: s.abs().sum()),
+                )
+                .sort_values("Total_VES", ascending=False)
+            )
+            lineas.append(f"--- EGRESOS EN MAYOR (Total Egresos Mayor: {total_eg_m:,.2f} VES) ---")
+            for _, r in grp_eg.iterrows():
+                pct = (r["Total_VES"] / total_eg_m * 100.0) if total_eg_m > 0 else 0.0
+                lineas.append(
+                    f"  * Concepto exacto Mayor: '{r['Mayor - Descripción']}' | Movimientos: {int(r['Cantidad'])} | "
+                    f"Monto Total VES: {r['Total_VES']:,.2f} | Porcentaje: {pct:.2f}% | USD: {r['Total_USD']:,.2f}"
+                )
+
+        # Ingresos / Entradas en Mayor
+        ingresos_m = df_mayor_activos[df_mayor_activos["Mayor - Monto"] > 0].copy()
+        if not ingresos_m.empty:
+            total_in_m = ingresos_m["Mayor - Monto"].sum()
+            grp_in = (
+                ingresos_m.groupby("Mayor - Descripción", as_index=False)
+                .agg(
+                    Cantidad=("Mayor - Monto", "count"),
+                    Total_VES=("Mayor - Monto", "sum"),
+                    Total_USD=("Monto Convertido USD", "sum"),
+                )
+                .sort_values("Total_VES", ascending=False)
+            )
+            lineas.append(f"\n--- INGRESOS EN MAYOR (Total Ingresos Mayor: {total_in_m:,.2f} VES) ---")
+            for _, r in grp_in.iterrows():
+                pct = (r["Total_VES"] / total_in_m * 100.0) if total_in_m > 0 else 0.0
+                lineas.append(
+                    f"  * Concepto exacto Mayor: '{r['Mayor - Descripción']}' | Movimientos: {int(r['Cantidad'])} | "
+                    f"Monto Total VES: {r['Total_VES']:,.2f} | Porcentaje: {pct:.2f}% | USD: {r['Total_USD']:,.2f}"
+                )
+
+    # Top 30 Movimientos individuales de Mayor (por magnitud de monto, sin anulados)
+    if not df_mayor_activos.empty:
+        df_top_m = df_mayor_activos.assign(Abs_Monto=df_mayor_activos["Mayor - Monto"].abs()).sort_values(
+            "Abs_Monto", ascending=False
+        ).head(30)
+        lineas.append("\n=== TOP 30 MOVIMIENTOS INDIVIDUALES DEL MAYOR CONTABLE ===")
+        for _, r in df_top_m.iterrows():
+            lineas.append(
+                f"  - Fecha: {r['Mayor - Fecha']} | Mayor - Descripción: '{r['Mayor - Descripción']}' | "
+                f"Ref: {r['Mayor - Referencia']} | Monto VES: {r['Mayor - Monto']:,.2f} | "
+                f"USD: {r['Monto Convertido USD']:,.2f} | Estado: {r['Marca Conciliación']}"
+            )
+
+    # Detalle de Partidas Pendientes (Banco y Libros)
+    df_pend = df_rep[df_rep["Marca Conciliación"].isin(["Por conciliar (Banco)", "Por conciliar (Libros)"])]
+    if not df_pend.empty:
+        lineas.append("\n=== DETALLE DE PARTIDAS PENDIENTES REALES (POR CONCILIAR) ===")
+        for _, r in df_pend.head(60).iterrows():
+            if r["Marca Conciliación"] == "Por conciliar (Banco)":
+                lineas.append(
+                    f"  - [PENDIENTE BANCO] Fecha: {r['Banco - Fecha']} | Banco - Descripción: '{r['Banco - Descripción']}' | "
+                    f"Ref: {r['Banco - Referencia']} | Monto VES: {r['Banco - Monto']:,.2f} | USD: {r['Monto Convertido USD']:,.2f}"
+                )
+            else:
+                lineas.append(
+                    f"  - [PENDIENTE LIBROS] Fecha: {r['Mayor - Fecha']} | Mayor - Descripción: '{r['Mayor - Descripción']}' | "
+                    f"Ref: {r['Mayor - Referencia']} | Monto VES: {r['Mayor - Monto']:,.2f} | USD: {r['Monto Convertido USD']:,.2f}"
+                )
+
+    return "\n".join(lineas)
+
 
 # Estilos CSS profesionales inspirados en la interfaz de referencia
 st.markdown(
@@ -114,6 +337,12 @@ if "movs_banco" not in st.session_state:
 
 if "movs_libros" not in st.session_state:
     st.session_state.movs_libros = []
+
+if "ultimo_analisis_ia" not in st.session_state:
+    st.session_state.ultimo_analisis_ia = ""
+
+if "ultima_pregunta_ia" not in st.session_state:
+    st.session_state.ultima_pregunta_ia = ""
 
 
 # =============================================================================
@@ -369,28 +598,27 @@ elif menu_proceso == "Reglas":
     st.markdown("Detalle automatizado de las reglas contables y de cruce aplicadas por el sistema en Venezuela.")
 
     st.markdown("""
-    ### 1. Cruce Exacto (Regla C1)
-    * **Condición:** Coincidencia exacta de referencia, monto idéntico (mismo signo) y fecha válida.
-    * **Propósito:** Cierre automático de alta confianza para transacciones claras.
+    ### 1. Aislamiento Previo de Asientos Anulados en Libros (Anti-Falsos Positivos)
+    * **Condición:** Antes de cruzar nada con el banco, el motor escanea el mayor contable buscando parejas de movimientos con montos exactos de signo opuesto ($+X$ y $-X$) que compartan la misma referencia (`Nº documento`) y descripción/contrapartida.
+    * **Propósito:** Neutralizar las anulaciones internas desde la raíz para que **nunca consuman movimientos bancarios reales** ni inflen los pendientes. Quedan etiquetadas como **`Asiento Anulado`**.
 
-    ### 2. Tolerancia de Fechas (Regla C2)
-    * **Condición:** Mismo monto y signo, permitiendo una diferencia de días entre la fecha del banco y la fecha contable dentro del rango de tolerancia configurado (por defecto 3 días).
-    * **Propósito:** Agrupar transacciones que cruzan fines de semana o días hábiles bancarios diferidos.
+    ### 2. Cruce Exacto (Regla C1)
+    * **Condición:** Coincidencia exacta de referencia, monto idéntico (mismo signo) y misma fecha.
+    * **Propósito:** Cierre automático de alta confianza para transacciones directas.
 
-    ### 3. Aislamiento de Asientos Anulados en Libros (Anti-Falsos Positivos)
-    * **Condición:** El motor analiza masivamente el libro contable buscando parejas de movimientos con montos de igual magnitud y signos opuestos ($+X$ y $-X$) que compartan la misma referencia o descripción normalizada.
-    * **Propósito:** **Neutralizarlos antes del cruce bancario**. De esta forma, las anulaciones internas de la empresa no se confunden con partidas pendientes reales ni se cruzan incorrectamente con el banco. Quedan marcadas como **`Asiento Anulado`**.
+    ### 3. Tolerancia de Fechas (Regla C2)
+    * **Condición:** Mismo monto y signo, permitiendo una diferencia de días entre la fecha del banco y la fecha contable dentro del rango configurado (por defecto 3 días).
+    * **Propósito:** Conciliar operaciones que cruzan fines de semana o días hábiles bancarios diferidos.
 
     ### 4. Sugerencias Inteligentes (Reglas C3 / C4)
-    * **C3 (Aproximadas):** Cruces con pequeñas tolerancias de monto o descripciones similares.
-    * **C4 (Agrupadas):** Conciliación de múltiples partidas contables que suman el valor exacto de un movimiento bancario (o viceversa).
-    * **Propósito:** Presentar propuestas analíticas para aprobación manual del tesorero.
+    * **C3 (Aproximadas):** Cruces con pequeñas diferencias de monto o descripciones similares.
+    * **C4 (Agrupadas):** Conciliación de múltiples partidas contables que suman exactamente el valor de un movimiento bancario (o viceversa).
     """)
 
 # --- VISTA: MOTOR DE CONCILIACIÓN CON EXCEL COMPLETO & ASISTENTE IA ---
 elif menu_proceso == "Conciliación":
     st.title("⚡ Motor de Cruce y Propuestas Automáticas")
-    st.markdown("Cruce inteligente de partidas aplicando las reglas del motor (C1, C2, C3, C4) con aislamiento de anulados.")
+    st.markdown("Cruce inteligente de partidas aplicando las reglas del motor (C1, C2, C3, C4) con aislamiento previo de anulados.")
 
     st.info(
         f"📊 Movimientos cargados en memoria — Banco: {len(st.session_state.movs_banco)} | Libros: {len(st.session_state.movs_libros)}"
@@ -418,6 +646,7 @@ elif menu_proceso == "Conciliación":
     if st.session_state.resultado_conciliacion:
         res = st.session_state.resultado_conciliacion
         datos_resumen = res.resumen()
+        df_reporte_actual = construir_dataframe_consolidado(res, st.session_state.tabla_tasas)
 
         st.markdown("---")
         st.subheader("📈 Resultados del Cruce")
@@ -442,153 +671,43 @@ elif menu_proceso == "Conciliación":
             st.success("¡Conciliación guardada permanentemente en el Historial del sistema!")
 
         # =====================================================================
-        # EXPORTAR REPORTE CONSOLIDADO EN EXCEL (CONCILIADAS + PENDIENTES + ANULADOS)
+        # EXPORTAR REPORTE CONSOLIDADO EN EXCEL (INCLUYE HOJA DE ANÁLISIS IA SI EXISTE)
         # =====================================================================
         st.markdown("---")
         st.subheader("📥 Exportar Reporte Consolidado")
 
-        if st.button("Generar Archivo Excel Consolidado (Completo)"):
-            try:
-                filas_excel = []
-                tabla_t = st.session_state.tabla_tasas
+        output_excel = io.BytesIO()
+        with pd.ExcelWriter(output_excel, engine="openpyxl") as writer:
+            df_reporte_actual.to_excel(writer, index=False, sheet_name="Conciliacion_Consolidada")
+            if st.session_state.ultimo_analisis_ia:
+                df_ia_hoja = pd.DataFrame([
+                    {"Consulta Realizada": st.session_state.ultima_pregunta_ia, "Análisis del Asistente IA": st.session_state.ultimo_analisis_ia}
+                ])
+                df_ia_hoja.to_excel(writer, index=False, sheet_name="Analisis_IA")
+        processed_data = output_excel.getvalue()
 
-                # 1. Procesar pares cerrados (Conciliados)
-                for par in res.pares:
-                    b_movs = par.banco
-                    l_movs = par.libros
-                    max_len = max(len(b_movs), len(l_movs))
-                    for i in range(max_len):
-                        mb = b_movs[i] if i < len(b_movs) else None
-                        ml = l_movs[i] if i < len(l_movs) else None
-                        
-                        f_op = mb.fecha if mb else (ml.fecha if ml else None)
-                        
-                        tasa_usd_val = 0.0
-                        monto_usd = 0.0
-                        if f_op:
-                            try:
-                                t_obj = tabla_t.obtener(f_op, "USD", tipo="BCV")
-                                tasa_usd_val = float(t_obj.valor)
-                                monto_mb = float(mb.monto) if mb else 0.0
-                                monto_usd = round(monto_mb / tasa_usd_val, 2) if tasa_usd_val > 0 else 0.0
-                            except Exception:
-                                pass
-
-                        filas_excel.append({
-                            "Banco - Fecha": mb.fecha if mb else "",
-                            "Banco - Descripción": mb.descripcion if mb else "",
-                            "Banco - Referencia": mb.referencia if mb else "",
-                            "Banco - Monto": float(mb.monto) if mb else 0.0,
-                            "Mayor - Fecha": ml.fecha if ml else "",
-                            "Mayor - Descripción": ml.descripcion if ml else "",
-                            "Mayor - Referencia": ml.referencia if ml else "",
-                            "Mayor - Monto": float(ml.monto) if ml else 0.0,
-                            "Marca Conciliación": f"Conciliado ({par.regla})",
-                            "Tasa BCV USD": tasa_usd_val,
-                            "Monto Convertido USD": monto_usd,
-                        })
-
-                # 2. Procesar partidas pendientes del Banco
-                for mb in res.banco_pendiente:
-                    tasa_usd_val = 0.0
-                    monto_usd = 0.0
-                    try:
-                        t_obj = tabla_t.obtener(mb.fecha, "USD", tipo="BCV")
-                        tasa_usd_val = float(t_obj.valor)
-                        monto_usd = round(float(mb.monto) / tasa_usd_val, 2) if tasa_usd_val > 0 else 0.0
-                    except Exception:
-                        pass
-
-                    filas_excel.append({
-                        "Banco - Fecha": mb.fecha,
-                        "Banco - Descripción": mb.descripcion,
-                        "Banco - Referencia": mb.referencia,
-                        "Banco - Monto": float(mb.monto),
-                        "Mayor - Fecha": "",
-                        "Mayor - Descripción": "",
-                        "Mayor - Referencia": "",
-                        "Mayor - Monto": 0.0,
-                        "Marca Conciliación": "Por conciliar (Banco)",
-                        "Tasa BCV USD": tasa_usd_val,
-                        "Monto Convertido USD": monto_usd,
-                    })
-
-                # 3. Procesar partidas pendientes de Libros
-                for ml in res.libros_pendiente:
-                    tasa_usd_val = 0.0
-                    monto_usd = 0.0
-                    try:
-                        t_obj = tabla_t.obtener(ml.fecha, "USD", tipo="BCV")
-                        tasa_usd_val = float(t_obj.valor)
-                        monto_usd = round(float(ml.monto) / tasa_usd_val, 2) if tasa_usd_val > 0 else 0.0
-                    except Exception:
-                        pass
-
-                    filas_excel.append({
-                        "Banco - Fecha": "",
-                        "Banco - Descripción": "",
-                        "Banco - Referencia": "",
-                        "Banco - Monto": 0.0,
-                        "Mayor - Fecha": ml.fecha,
-                        "Mayor - Descripción": ml.descripcion,
-                        "Mayor - Referencia": ml.referencia,
-                        "Mayor - Monto": float(ml.monto),
-                        "Marca Conciliación": "Por conciliar (Libros)",
-                        "Tasa BCV USD": tasa_usd_val,
-                        "Monto Convertido USD": monto_usd,
-                    })
-
-                # 4. Procesar Asientos Anulados detectados en Libros
-                for ml, motivo_anulado in res.libros_anulados:
-                    tasa_usd_val = 0.0
-                    monto_usd = 0.0
-                    try:
-                        t_obj = tabla_t.obtener(ml.fecha, "USD", tipo="BCV")
-                        tasa_usd_val = float(t_obj.valor)
-                        monto_usd = round(float(ml.monto) / tasa_usd_val, 2) if tasa_usd_val > 0 else 0.0
-                    except Exception:
-                        pass
-
-                    filas_excel.append({
-                        "Banco - Fecha": "",
-                        "Banco - Descripción": "",
-                        "Banco - Referencia": "",
-                        "Banco - Monto": 0.0,
-                        "Mayor - Fecha": ml.fecha,
-                        "Mayor - Descripción": ml.descripcion,
-                        "Mayor - Referencia": ml.referencia,
-                        "Mayor - Monto": float(ml.monto),
-                        "Marca Conciliación": f"Asiento Anulado",
-                        "Tasa BCV USD": tasa_usd_val,
-                        "Monto Convertido USD": monto_usd,
-                    })
-
-                df_reporte = pd.DataFrame(filas_excel)
-
-                output = io.BytesIO()
-                with pd.ExcelWriter(output, engine="openpyxl") as writer:
-                    df_reporte.to_excel(writer, index=False, sheet_name="Conciliacion_Consolidada")
-                processed_data = output.getvalue()
-
-                st.download_button(
-                    label="📥 Descargar Reporte Completo en Excel",
-                    data=processed_data,
-                    file_name="Reporte_Conciliacion_Consolidado.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                )
-                st.success("¡Reporte Excel completo generado correctamente para descarga!")
-            except Exception as e:
-                st.error(f"Error al generar el Excel: {e}")
+        st.download_button(
+            label="📥 Descargar Reporte Completo en Excel (.xlsx)",
+            data=processed_data,
+            file_name="Reporte_Conciliacion_Consolidado.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
 
         # =====================================================================
-        # ASISTENTE DE IA (OPENROUTER)
+        # ASISTENTE DE IA INTEGRADO CON DATOS REALES DEL MAYOR Y BANCO + DESCARGA
         # =====================================================================
         st.markdown("---")
-        with st.expander("🤖 Asistente IA para Análisis de Conciliación", expanded=False):
-            st.markdown("Realice preguntas o solicite análisis sobre las partidas conciliadas y pendientes.")
-            pregunta_ai = st.text_input("Ejemplo: ¿Qué partidas pendientes en el banco superan montos importantes?")
-            
-            if st.button("Consultar Asistente IA"):
+        with st.expander("🤖 Asistente IA para Análisis de Conciliación (Datos Reales del Mayor y Banco)", expanded=True):
+            st.markdown(
+                "Realice preguntas sobre el **Top de movimientos mayores**, distribución porcentual por **`Mayor - Descripción`**, "
+                "o partidas pendientes. El asistente responde **exclusivamente con los escritos y montos reales de sus archivos**."
+            )
+            pregunta_ai = st.text_input(
+                "Consulta para el Asistente IA:",
+                placeholder="Ejemplo: Muéstrame el top de egresos y su distribución porcentual usando el escrito exacto de Mayor - Descripción",
+            )
+
+            if st.button("Consultar Asistente IA", type="primary"):
                 if not pregunta_ai.strip():
                     st.warning("Por favor ingrese una pregunta para el asistente.")
                 else:
@@ -600,24 +719,83 @@ elif menu_proceso == "Conciliación":
                                 api_key=st.secrets.get("OPENAI_API_KEY", ""),
                                 base_url=st.secrets.get("OPENAI_BASE_URL", "https://openrouter.ai/api/v1"),
                             )
-                            contexto = f"Pares cerrados: {len(res.pares)}, Banco pendiente: {len(res.banco_pendiente)}, Libros pendiente: {len(res.libros_pendiente)}, Anulados: {len(res.libros_anulados)}"
-                            
+                            contexto_real = construir_contexto_ia_real(df_reporte_actual, res)
+
+                            prompt_sistema = (
+                                "Eres un auditor financiero y analista de tesorería experto en Venezuela. "
+                                "REGLA ESTRICTA E INQUEBRANTABLE: "
+                                "1) Está PROHIBIDO inventar categorías genéricas (como 'Sueldos y salarios', 'Compras de inventario', 'Servicios públicos', 'Alquiler', 'Publicidad', etc.) "
+                                "o inventar montos hipotéticos que no estén en el contexto. "
+                                "2) Cuando el usuario pida el Top de movimientos, distribución porcentual de egresos/ingresos o análisis por concepto del Mayor, "
+                                "debes usar ÚNICAMENTE y LITERALMENTE el texto exacto del campo 'Mayor - Descripción' (por ejemplo: 'BANCO BANESCO', 'AGROINSUMOS PANAMERICANO,C.A.', "
+                                "'ANTICIPO DE GASTOS REPRESENTANTES DE VENTAS', 'TELEFONICA VENEZOLANA,C.A', 'INTERESES BANCARIOS', etc.) y los montos exactos provistos en el contexto. "
+                                "3) Excluye siempre los 'Asiento Anulado' de los totales operativos salvo que el usuario pregunte específicamente por los anulados."
+                            )
+
                             response = client.chat.completions.create(
                                 model="openai/gpt-4o-mini",
+                                temperature=0.0,
                                 messages=[
-                                    {
-                                        "role": "system",
-                                        "content": "Eres un asistente experto en contabilidad y conciliaciones bancarias para empresas en Venezuela. Analiza con precisión los datos y responde de forma ejecutiva.",
-                                    },
+                                    {"role": "system", "content": prompt_sistema},
                                     {
                                         "role": "user",
-                                        "content": f"Contexto financiero actual: {contexto}\nPregunta del analista: {pregunta_ai}",
+                                        "content": f"DATOS REALES DE LA CONCILIACIÓN ACTUAL:\n{contexto_real}\n\nPREGUNTA DEL ANALISTA:\n{pregunta_ai}",
                                     },
                                 ],
                             )
-                            st.success(response.choices[0].message.content)
+                            respuesta_texto = response.choices[0].message.content
+                            st.session_state.ultimo_analisis_ia = respuesta_texto
+                            st.session_state.ultima_pregunta_ia = pregunta_ai
                         except Exception as ai_err:
                             st.error(f"Error al conectar con la API (Verifique su API Key y base_url en st.secrets): {ai_err}")
+
+            # Mostrar último análisis generado y botones de descarga directa
+            if st.session_state.ultimo_analisis_ia:
+                st.markdown("#### 📄 Resultado del Análisis IA")
+                st.markdown(st.session_state.ultimo_analisis_ia)
+
+                col_d1, col_d2 = st.columns(2)
+                with col_d1:
+                    st.download_button(
+                        label="📥 Descargar Análisis IA (.txt / .md)",
+                        data=st.session_state.ultimo_analisis_ia.encode("utf-8"),
+                        file_name="Analisis_IA_Conciliacion.md",
+                        mime="text/markdown",
+                    )
+                with col_d2:
+                    # Generar Excel con el resumen real por Mayor - Descripción + el texto del análisis IA
+                    out_ia_xlsx = io.BytesIO()
+                    df_mayor_real = df_reporte_actual[
+                        (df_reporte_actual["Mayor - Descripción"].astype(str).str.strip() != "")
+                        & (df_reporte_actual["Marca Conciliación"] != "Asiento Anulado")
+                    ].copy()
+                    with pd.ExcelWriter(out_ia_xlsx, engine="openpyxl") as writer_ia:
+                        pd.DataFrame([
+                            {
+                                "Fecha": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                                "Consulta": st.session_state.ultima_pregunta_ia,
+                                "Respuesta IA": st.session_state.ultimo_analisis_ia,
+                            }
+                        ]).to_excel(writer_ia, index=False, sheet_name="Analisis_IA")
+                        if not df_mayor_real.empty:
+                            resumen_conceptos = (
+                                df_mayor_real.groupby(["Mayor - Descripción", "Marca Conciliación"], as_index=False)
+                                .agg(
+                                    Cantidad_Movimientos=("Mayor - Monto", "count"),
+                                    Total_VES=("Mayor - Monto", "sum"),
+                                    Total_USD=("Monto Convertido USD", "sum"),
+                                )
+                                .sort_values("Total_VES", ascending=True)
+                            )
+                            resumen_conceptos.to_excel(writer_ia, index=False, sheet_name="Resumen_Mayor_Real")
+
+                    st.download_button(
+                        label="📊 Descargar Análisis IA y Resumen Mayor en Excel (.xlsx)",
+                        data=out_ia_xlsx.getvalue(),
+                        file_name="Analisis_IA_Mayor_Real.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
+
         if res.sugerencias:
             st.markdown("### 💡 Sugerencias pendientes de aprobación (C3 / C4)")
             for idx, sug in enumerate(res.sugerencias):
@@ -659,9 +837,16 @@ elif menu_proceso == "Partidas pendientes":
                 st.info("Sin partidas pendientes en libros.")
         with col_pa:
             st.subheader("Asientos Anulados")
-            if res.libros_anulados:
+            if getattr(res, "libros_anulados", None):
                 lista_anulados = [
-                    {"id": m.id, "fecha": m.fecha, "monto": m.monto, "descripcion": m.descripcion, "referencia": m.referencia, "marca": marca}
+                    {
+                        "id": m.id,
+                        "fecha": m.fecha,
+                        "monto": m.monto,
+                        "descripcion": m.descripcion,
+                        "referencia": m.referencia,
+                        "marca": marca,
+                    }
                     for m, marca in res.libros_anulados
                 ]
                 df_pa = pd.DataFrame(lista_anulados)
@@ -674,7 +859,7 @@ elif menu_proceso == "Partidas pendientes":
 elif menu_proceso == "Historial":
     st.title("📜 Historial Permanente de Conciliaciones Cerradas")
     st.markdown("Registro histórico persistente almacenado para auditoría, seguimiento y control.")
-    
+
     historial_disco = cargar_historial_disco()
     if historial_disco:
         st.success(f"Se encontraron {len(historial_disco)} conciliación(es) guardada(s) en el sistema.")
