@@ -1,6 +1,6 @@
 """
 conciliar.py - Motor de conciliación (núcleo puro).
-Incluye detección y aislamiento automático de asientos anulados en libros.
+Incluye detección y aislamiento automático de asientos anulados en libros antes del cruce bancario.
 """
 from __future__ import annotations
 
@@ -342,8 +342,9 @@ def neutralizar_reversos(
 
 def _detectar_anulados_libros(movimientos_libros: list[Movimiento]) -> tuple[list[Movimiento], list[tuple[Movimiento, str]]]:
     """
-    Identifica en los movimientos de libros pendientes aquellos asientos que se anulan entre sí
-    (mismo monto con signo opuesto y misma referencia o descripción).
+    Identifica en los movimientos de libros aquellos asientos que se anulan entre sí
+    (mismo monto con signo opuesto y misma referencia normalizada o descripción normalizada)
+    ANTES de cruzar con el banco.
     Retorna: (libros_pendientes_reales, libros_anulados)
     """
     pendientes_reales: list[Movimiento] = []
@@ -352,12 +353,12 @@ def _detectar_anulados_libros(movimientos_libros: list[Movimiento]) -> tuple[lis
     
     movs = list(movimientos_libros)
     for i, m1 in enumerate(movs):
-        if id(m1) in usados:
+        if m1.id in usados:
             continue
         encontrado = False
         for j in range(i + 1, len(movs)):
             m2 = movs[j]
-            if id(m2) in usados:
+            if m2.id in usados:
                 continue
             
             mismo_ref = (m1.referencia_norm and m2.referencia_norm and m1.referencia_norm == m2.referencia_norm)
@@ -372,12 +373,12 @@ def _detectar_anulados_libros(movimientos_libros: list[Movimiento]) -> tuple[lis
             if abs(v1 + v2) < 0.01 and (mismo_ref or mismo_desc):
                 anulados.append((m1, "Asiento Anulado"))
                 anulados.append((m2, "Asiento Anulado"))
-                usados.add(id(m1))
-                usados.add(id(m2))
+                usados.add(m1.id)
+                usados.add(m2.id)
                 encontrado = True
                 break
                 
-        if not encontrado and id(m1) not in usados:
+        if not encontrado and m1.id not in usados:
             pendientes_reales.append(m1)
             
     return pendientes_reales, anulados
@@ -593,6 +594,10 @@ def conciliar(
     banco = sorted(banco, key=_orden)
     libros = sorted(libros, key=_orden)
 
+    # 1. Aislar y remover asientos contables anulados ANTES de realizar los cruces bancarios
+    libros, libros_anulados = _detectar_anulados_libros(libros)
+
+    # 2. Ejecutar cruces
     c1, banco, libros = _cruzar_exacto(banco, libros, 0, "C1", exigir_referencia=True)
     c2, banco, libros = _cruzar_exacto(banco, libros, cfg.tolerancia_dias_c2, "C2", True)
     if not cfg.exigir_referencia_c2:
@@ -606,14 +611,11 @@ def conciliar(
         bloqueados_l={m.id for s in c3 for m in s.libros},
     )
 
-    # Detección y aislamiento de asientos anulados en los pendientes de libros restantes
-    libros_pend_reales, libros_anulados = _detectar_anulados_libros(libros)
-
     return Resultado(
         pares=c1 + c2,
         sugerencias=c3 + c4,
         banco_pendiente=banco,
-        libros_pendiente=libros_pend_reales,
+        libros_pendiente=libros,
         reversos_banco=rev_b,
         reversos_libros=rev_l,
         libros_anulados=libros_anulados,

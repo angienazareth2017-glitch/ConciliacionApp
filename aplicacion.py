@@ -1,12 +1,15 @@
 """
 aplicacion.py - Aplicación web principal en Streamlit para el 
-Sistema de Conciliación y Tesorería Multidivisa con Asistente IA y Reporte Excel.
+Sistema de Conciliación y Tesorería Multidivisa con Asistente IA, Reporte Excel y Historial Persistente.
 """
 from __future__ import annotations
 
 import io
+import json
+import os
 import pandas as pd
 import streamlit as st
+from datetime import datetime
 
 # Importación de motores lógicos locales
 from conciliar import (
@@ -25,13 +28,33 @@ except ImportError:
     OpenAI = None
 
 # =============================================================================
-# 1. CONFIGURACIÓN INICIAL DE LA PÁGINA
+# 1. CONFIGURACIÓN INICIAL DE LA PÁGINA Y PERSISTENCIA
 # =============================================================================
 st.set_page_config(
     page_title="Conciliación - AI Reconciliation",
     page_icon="📊",
     layout="wide",
 )
+
+HISTORIAL_FILE = "historial_conciliaciones.json"
+
+def cargar_historial_disco() -> list[dict]:
+    if os.path.exists(HISTORIAL_FILE):
+        try:
+            with open(HISTORIAL_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return []
+    return []
+
+def guardar_en_historial(resumen_dict: dict) -> None:
+    historial = cargar_historial_disco()
+    historial.insert(0, resumen_dict)
+    try:
+        with open(HISTORIAL_FILE, "w", encoding="utf-8") as f:
+            json.dump(historial, f, ensure_ascii=False, indent=4)
+    except Exception:
+        pass
 
 # Estilos CSS profesionales inspirados en la interfaz de referencia
 st.markdown(
@@ -219,11 +242,10 @@ elif menu_proceso == "Dashboard":
         "<p style='color: #64748B; margin-top: -15px;'>Resumen general de conciliaciones bancarias</p>",
         unsafe_allow_html=True,
     )
-# Banner de bienvenida estilo Opción 2
     st.success(
-        "🚀 **Sistema de Conciliación Inteligente Activo** — Bienvenido al"
-        " entorno de trabajo multimoneda. Utilice el menú lateral para iniciar"
-        " la importación o consultar las tasas.",
+        "🚀 **Sistema de Conciliación Inteligente Activo** — Bienvenido al "
+        "entorno de trabajo multimoneda. Utilice el menú lateral para iniciar "
+        "la importación o consultar las tasas.",
         icon="💼",
     )
     res = st.session_state.resultado_conciliacion
@@ -341,10 +363,34 @@ elif menu_proceso == "Importar":
         except Exception as err:
             st.error(f"Error al procesar el archivo cargado: {err}")
 
+# --- VISTA: REGLAS DEL MOTOR ---
+elif menu_proceso == "Reglas":
+    st.title("📋 Configuración y Criterios del Motor de Conciliación")
+    st.markdown("Detalle automatizado de las reglas contables y de cruce aplicadas por el sistema en Venezuela.")
+
+    st.markdown("""
+    ### 1. Cruce Exacto (Regla C1)
+    * **Condición:** Coincidencia exacta de referencia, monto idéntico (mismo signo) y fecha válida.
+    * **Propósito:** Cierre automático de alta confianza para transacciones claras.
+
+    ### 2. Tolerancia de Fechas (Regla C2)
+    * **Condición:** Mismo monto y signo, permitiendo una diferencia de días entre la fecha del banco y la fecha contable dentro del rango de tolerancia configurado (por defecto 3 días).
+    * **Propósito:** Agrupar transacciones que cruzan fines de semana o días hábiles bancarios diferidos.
+
+    ### 3. Aislamiento de Asientos Anulados en Libros (Anti-Falsos Positivos)
+    * **Condición:** El motor analiza masivamente el libro contable buscando parejas de movimientos con montos de igual magnitud y signos opuestos ($+X$ y $-X$) que compartan la misma referencia o descripción normalizada.
+    * **Propósito:** **Neutralizarlos antes del cruce bancario**. De esta forma, las anulaciones internas de la empresa no se confunden con partidas pendientes reales ni se cruzan incorrectamente con el banco. Quedan marcadas como **`Asiento Anulado`**.
+
+    ### 4. Sugerencias Inteligentes (Reglas C3 / C4)
+    * **C3 (Aproximadas):** Cruces con pequeñas tolerancias de monto o descripciones similares.
+    * **C4 (Agrupadas):** Conciliación de múltiples partidas contables que suman el valor exacto de un movimiento bancario (o viceversa).
+    * **Propósito:** Presentar propuestas analíticas para aprobación manual del tesorero.
+    """)
+
 # --- VISTA: MOTOR DE CONCILIACIÓN CON EXCEL COMPLETO & ASISTENTE IA ---
 elif menu_proceso == "Conciliación":
     st.title("⚡ Motor de Cruce y Propuestas Automáticas")
-    st.markdown("Cruce inteligente de partidas aplicando las reglas del motor (C1, C2, C3, C4).")
+    st.markdown("Cruce inteligente de partidas aplicando las reglas del motor (C1, C2, C3, C4) con aislamiento de anulados.")
 
     st.info(
         f"📊 Movimientos cargados en memoria — Banco: {len(st.session_state.movs_banco)} | Libros: {len(st.session_state.movs_libros)}"
@@ -376,14 +422,27 @@ elif menu_proceso == "Conciliación":
         st.markdown("---")
         st.subheader("📈 Resultados del Cruce")
 
-        kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+        kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
         kpi1.metric("Pares Cerrados (C1/C2)", datos_resumen.get("pares_cerrados", 0))
         kpi2.metric("Sugerencias (C3/C4)", datos_resumen.get("sugerencias", 0))
         kpi3.metric("Banco Pendiente", datos_resumen.get("banco_pendiente", 0))
         kpi4.metric("Libros Pendiente", datos_resumen.get("libros_pendiente", 0))
+        kpi5.metric("Asientos Anulados", datos_resumen.get("libros_anulados", 0))
+
+        # Botón para guardar permanentemente en el historial
+        if st.button("💾 Guardar Conciliación Actual en Historial"):
+            registro_historial = {
+                "fecha_cierre": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "pares_cerrados": datos_resumen.get("pares_cerrados", 0),
+                "banco_pendiente": datos_resumen.get("banco_pendiente", 0),
+                "libros_pendiente": datos_resumen.get("libros_pendiente", 0),
+                "libros_anulados": datos_resumen.get("libros_anulados", 0),
+            }
+            guardar_en_historial(registro_historial)
+            st.success("¡Conciliación guardada permanentemente en el Historial del sistema!")
 
         # =====================================================================
-        # EXPORTAR REPORTE CONSOLIDADO EN EXCEL (TODAS LAS PARTIDAS: CONCILIADAS + PENDIENTES)
+        # EXPORTAR REPORTE CONSOLIDADO EN EXCEL (CONCILIADAS + PENDIENTES + ANULADOS)
         # =====================================================================
         st.markdown("---")
         st.subheader("📥 Exportar Reporte Consolidado")
@@ -429,7 +488,7 @@ elif menu_proceso == "Conciliación":
                             "Monto Convertido USD": monto_usd,
                         })
 
-                # 2. Procesar partidas pendientes del Banco (Por conciliar Banco)
+                # 2. Procesar partidas pendientes del Banco
                 for mb in res.banco_pendiente:
                     tasa_usd_val = 0.0
                     monto_usd = 0.0
@@ -454,7 +513,7 @@ elif menu_proceso == "Conciliación":
                         "Monto Convertido USD": monto_usd,
                     })
 
-                # 3. Procesar partidas pendientes de Libros (Por conciliar Libros)
+                # 3. Procesar partidas pendientes de Libros
                 for ml in res.libros_pendiente:
                     tasa_usd_val = 0.0
                     monto_usd = 0.0
@@ -479,9 +538,33 @@ elif menu_proceso == "Conciliación":
                         "Monto Convertido USD": monto_usd,
                     })
 
+                # 4. Procesar Asientos Anulados detectados en Libros
+                for ml, motivo_anulado in res.libros_anulados:
+                    tasa_usd_val = 0.0
+                    monto_usd = 0.0
+                    try:
+                        t_obj = tabla_t.obtener(ml.fecha, "USD", tipo="BCV")
+                        tasa_usd_val = float(t_obj.valor)
+                        monto_usd = round(float(ml.monto) / tasa_usd_val, 2) if tasa_usd_val > 0 else 0.0
+                    except Exception:
+                        pass
+
+                    filas_excel.append({
+                        "Banco - Fecha": "",
+                        "Banco - Descripción": "",
+                        "Banco - Referencia": "",
+                        "Banco - Monto": 0.0,
+                        "Mayor - Fecha": ml.fecha,
+                        "Mayor - Descripción": ml.descripcion,
+                        "Mayor - Referencia": ml.referencia,
+                        "Mayor - Monto": float(ml.monto),
+                        "Marca Conciliación": f"Asiento Anulado",
+                        "Tasa BCV USD": tasa_usd_val,
+                        "Monto Convertido USD": monto_usd,
+                    })
+
                 df_reporte = pd.DataFrame(filas_excel)
 
-                # Guardar en memoria con openpyxl
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine="openpyxl") as writer:
                     df_reporte.to_excel(writer, index=False, sheet_name="Conciliacion_Consolidada")
@@ -498,13 +581,10 @@ elif menu_proceso == "Conciliación":
                 st.error(f"Error al generar el Excel: {e}")
 
         # =====================================================================
-        # OPCIÓN 1: ASISTENTE DE IA INTEGRADO (CONECTADO A OPENROUTER)
-        # =====================================================================
-        # =====================================================================
-        # OPCIÓN 1: ASISTENTE DE IA INTEGRADO (CONECTADO A OPENROUTER)
+        # ASISTENTE DE IA (OPENROUTER)
         # =====================================================================
         st.markdown("---")
-        with st.expander("🤖 Asistente IA para Análisis de Conciliación (Opción 1)", expanded=False):
+        with st.expander("🤖 Asistente IA para Análisis de Conciliación", expanded=False):
             st.markdown("Realice preguntas o solicite análisis sobre las partidas conciliadas y pendientes.")
             pregunta_ai = st.text_input("Ejemplo: ¿Qué partidas pendientes en el banco superan montos importantes?")
             
@@ -520,7 +600,7 @@ elif menu_proceso == "Conciliación":
                                 api_key=st.secrets.get("OPENAI_API_KEY", ""),
                                 base_url=st.secrets.get("OPENAI_BASE_URL", "https://openrouter.ai/api/v1"),
                             )
-                            contexto = f"Pares cerrados: {len(res.pares)}, Banco pendiente: {len(res.banco_pendiente)}, Libros pendiente: {len(res.libros_pendiente)}"
+                            contexto = f"Pares cerrados: {len(res.pares)}, Banco pendiente: {len(res.banco_pendiente)}, Libros pendiente: {len(res.libros_pendiente)}, Anulados: {len(res.libros_anulados)}"
                             
                             response = client.chat.completions.create(
                                 model="openai/gpt-4o-mini",
@@ -558,11 +638,11 @@ elif menu_proceso == "Conciliación":
                         st.rerun()
 
 elif menu_proceso == "Partidas pendientes":
-    st.title("📌 Partidas Abiertas y Pendientes")
-    st.markdown("Gestión de partidas sin resolver, clasificación por etiquetas y extornos.")
+    st.title("📌 Partidas Abiertas, Pendientes y Asientos Anulados")
+    st.markdown("Gestión detallada de partidas sin resolver y asientos contables aislados por anulación.")
     if st.session_state.resultado_conciliacion:
         res = st.session_state.resultado_conciliacion
-        col_pb, col_pl = st.columns(2)
+        col_pb, col_pl, col_pa = st.columns(3)
         with col_pb:
             st.subheader("Pendientes de Banco")
             if res.banco_pendiente:
@@ -577,13 +657,32 @@ elif menu_proceso == "Partidas pendientes":
                 st.dataframe(df_pl[["id", "fecha", "monto", "descripcion", "referencia"]])
             else:
                 st.info("Sin partidas pendientes en libros.")
+        with col_pa:
+            st.subheader("Asientos Anulados")
+            if res.libros_anulados:
+                lista_anulados = [
+                    {"id": m.id, "fecha": m.fecha, "monto": m.monto, "descripcion": m.descripcion, "referencia": m.referencia, "marca": marca}
+                    for m, marca in res.libros_anulados
+                ]
+                df_pa = pd.DataFrame(lista_anulados)
+                st.dataframe(df_pa[["id", "fecha", "monto", "descripcion", "referencia", "marca"]])
+            else:
+                st.info("Sin asientos anulados detectados.")
     else:
-        st.info("Ejecute una conciliación primero para visualizar las partidas pendientes.")
+        st.info("Ejecute una conciliación primero para visualizar las partidas.")
 
 elif menu_proceso == "Historial":
-    st.title("📜 Historial de Conciliaciones Cerradas")
-    st.markdown("Registro histórico para auditoría, seguimiento y control.")
-    if st.session_state.resultado_conciliacion:
-        st.success("Conciliación actual cerrada y registrada correctamente en el sistema.")
+    st.title("📜 Historial Permanente de Conciliaciones Cerradas")
+    st.markdown("Registro histórico persistente almacenado para auditoría, seguimiento y control.")
+    
+    historial_disco = cargar_historial_disco()
+    if historial_disco:
+        st.success(f"Se encontraron {len(historial_disco)} conciliación(es) guardada(s) en el sistema.")
+        for idx, reg in enumerate(historial_disco):
+            with st.expander(f"Cierre del {reg.get('fecha_cierre', 'Sin fecha')} — Pares cerrados: {reg.get('pares_cerrados', 0)}"):
+                st.write(f"* **Pares cerrados (C1/C2):** {reg.get('pares_cerrados', 0)}")
+                st.write(f"* **Banco pendiente:** {reg.get('banco_pendiente', 0)}")
+                st.write(f"* **Libros pendiente:** {reg.get('libros_pendiente', 0)}")
+                st.write(f"* **Asientos anulados aislados:** {reg.get('libros_anulados', 0)}")
     else:
-        st.info("No hay conciliaciones cerradas registradas todavía.")
+        st.info("No hay conciliaciones guardadas en el historial todavía. Ejecute una conciliación y haga clic en 'Guardar Conciliación Actual en Historial'.")
