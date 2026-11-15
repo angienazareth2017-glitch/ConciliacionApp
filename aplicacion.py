@@ -101,10 +101,12 @@ def deserializar_movimiento(d: dict) -> Movimiento:
 
 
 def ir_a_menu(destino: str) -> None:
-    """Cambia de pestaña programáticamente desde cualquier botón de la app."""
-    st.session_state.menu_proceso = destino
-    st.session_state.modulo_analisis = "Resumen histórico"
-    st.session_state.modulo_maestros = "Ninguno"
+    """Cambia de pestaña de forma segura (tanto en callbacks on_click como antes de st.rerun)."""
+    st.session_state._nav_pending = {
+        "menu_proceso": destino,
+        "modulo_analisis": "Resumen histórico",
+        "modulo_maestros": "Ninguno",
+    }
 
 
 def retomar_conciliacion_historica(reg: dict) -> bool:
@@ -832,24 +834,17 @@ def construir_contexto_ia_real(df_rep: pd.DataFrame, res) -> str:
 st.markdown(
     """
     <style>
-        /* Fondo general blanco/gris muy tenue y texto negro nítido */
+        /* Fondo general claro y texto negro nítido */
         .stApp {
             background-color: #F8FAFC;
             color: #0B0F19;
-            font-size: 16px;
         }
 
-        /* Tipografía general incrementada y en negro profundo para máximo contraste */
-        p, li, label, .stMarkdown, .stText, span {
-            color: #0B0F19;
-            font-size: 16px !important;
-            line-height: 1.55;
-        }
+        /* Títulos de sección en Azul Oscuro y Negro con tamaño apropiado */
         h1 {
             color: #0A1E46 !important;
             font-size: 32px !important;
             font-weight: 800 !important;
-            letter-spacing: -0.5px;
         }
         h2 {
             color: #0A1E46 !important;
@@ -873,24 +868,22 @@ st.markdown(
             border-radius: 12px;
             border: 1.5px solid #CBD5E1;
             box-shadow: 0 4px 12px rgba(10, 30, 70, 0.06);
-            padding: 16px;
-            margin-bottom: 12px;
+            padding: 18px;
+            margin-bottom: 14px;
         }
 
-        /* Barra lateral (Sidebar) con contraste limpio y acentos en Azul Oscuro */
+        /* Barra lateral (Sidebar) con contraste limpio */
         section[data-testid="stSidebar"] {
             background-color: #FFFFFF;
             border-right: 2px solid #E2E8F0;
         }
-        section[data-testid="stSidebar"] .stRadio label {
+        section[data-testid="stSidebar"] .stRadio label p {
             font-size: 16px !important;
             font-weight: 600 !important;
-            padding: 6px 10px;
-            border-radius: 8px;
             color: #0B0F19 !important;
         }
 
-        /* Botones principales y secundarios en Azul Oscuro y Negro */
+        /* Botones principales y secundarios en Azul Oscuro */
         .stButton button[kind="primary"] {
             background-color: #0A1E46 !important;
             color: #FFFFFF !important;
@@ -901,8 +894,11 @@ st.markdown(
             padding: 0.55rem 1.2rem !important;
             box-shadow: 0 2px 6px rgba(10, 30, 70, 0.25);
         }
-        .stButton button[kind="primary"] * {
+        .stButton button[kind="primary"] p,
+        .stButton button[kind="primary"] span {
             color: #FFFFFF !important;
+            font-size: 16px !important;
+            font-weight: 700 !important;
         }
         .stButton button[kind="primary"]:hover {
             background-color: #15357A !important;
@@ -917,6 +913,12 @@ st.markdown(
             font-weight: 700 !important;
             padding: 0.5rem 1rem !important;
         }
+        .stButton button[kind="secondary"] p,
+        .stButton button[kind="secondary"] span {
+            color: #0A1E46 !important;
+            font-size: 15px !important;
+            font-weight: 700 !important;
+        }
         .stButton button[kind="secondary"]:hover {
             background-color: #EFF6FF !important;
         }
@@ -930,91 +932,111 @@ st.markdown(
             font-weight: 700 !important;
             border: none !important;
         }
-        .stDownloadButton button * {
+        .stDownloadButton button p,
+        .stDownloadButton button span {
             color: #FFFFFF !important;
-        }
-
-        /* Métricas (KPIs) con números grandes en Azul Oscuro y etiquetas en Negro */
-        div[data-testid="stMetricValue"] {
-            color: #0A1E46 !important;
-            font-size: 32px !important;
-            font-weight: 800 !important;
-        }
-        div[data-testid="stMetricLabel"] p {
-            color: #0B0F19 !important;
             font-size: 15px !important;
             font-weight: 700 !important;
         }
 
-        /* Banner Superior Azul Oscuro Corporativo para cada vista */
-        .concialiapp-banner {
-            background: linear-gradient(135deg, #0A1E46 0%, #133375 100%);
-            color: #FFFFFF !important;
-            padding: 24px 28px;
+        /* Banner Superior Azul Oscuro Corporativo (garantiza letras blancas y grandes) */
+        .tesora-banner {
+            background: linear-gradient(135deg, #0A1E46 0%, #15357A 100%);
+            padding: 28px 32px;
             border-radius: 14px;
-            margin-bottom: 22px;
+            margin-bottom: 24px;
             box-shadow: 0 6px 18px rgba(10, 30, 70, 0.18);
             border-left: 6px solid #38BDF8;
         }
-        .concialiapp-banner h1 {
+        .tesora-banner .tesora-banner-title,
+        .tesora-banner .tesora-banner-title p,
+        .tesora-banner .tesora-banner-title span {
             color: #FFFFFF !important;
-            font-size: 30px !important;
+            font-size: 32px !important;
             font-weight: 800 !important;
-            margin: 0 0 6px 0 !important;
+            line-height: 1.25 !important;
+            margin: 0 0 10px 0 !important;
+            display: block;
         }
-        .concialiapp-banner p {
+        .tesora-banner .tesora-banner-sub,
+        .tesora-banner .tesora-banner-sub p,
+        .tesora-banner .tesora-banner-sub span {
             color: #E2E8F0 !important;
-            font-size: 16px !important;
-            margin: 0 !important;
+            font-size: 18px !important;
             font-weight: 500 !important;
+            line-height: 1.45 !important;
+            margin: 0 !important;
+            display: block;
         }
 
-        /* Sub-banner informativo en Azul Oscuro */
-        .concialiapp-subbanner {
-            background-color: #0F295E;
-            color: #FFFFFF !important;
-            padding: 16px 22px;
-            border-radius: 10px;
-            margin-bottom: 20px;
-            font-size: 16px !important;
-            font-weight: 600;
+        /* Tarjetas de Indicadores (Recuadros KPI) con fuente grande y clara */
+        .tesora-kpi-card {
+            background-color: #FFFFFF;
+            border: 1.5px solid #CBD5E1;
+            border-top: 5px solid #0A1E46;
+            border-radius: 12px;
+            padding: 20px 22px;
+            box-shadow: 0 4px 12px rgba(10, 30, 70, 0.06);
+            margin-bottom: 16px;
         }
-        .concialiapp-subbanner * {
-            color: #FFFFFF !important;
+        .tesora-kpi-label {
+            color: #1E293B !important;
+            font-size: 17px !important;
+            font-weight: 700 !important;
+            margin-bottom: 10px !important;
+            line-height: 1.35 !important;
+            display: block;
+        }
+        .tesora-kpi-value {
+            color: #0A1E46 !important;
+            font-size: 38px !important;
+            font-weight: 800 !important;
+            line-height: 1.1 !important;
+            display: block;
+        }
+
+        /* Respaldo para st.metric nativos */
+        div[data-testid="stMetricValue"],
+        div[data-testid="stMetricValue"] > div,
+        div[data-testid="stMetricValue"] p {
+            color: #0A1E46 !important;
+            font-size: 36px !important;
+            font-weight: 800 !important;
+        }
+        div[data-testid="stMetricLabel"] p,
+        div[data-testid="stMetricLabel"] label {
+            color: #0B0F19 !important;
+            font-size: 17px !important;
+            font-weight: 700 !important;
         }
 
         /* Insignia Tesora Pro en la barra lateral */
         .sidebar-brand {
             background: linear-gradient(135deg, #0A1E46 0%, #15357A 100%);
-            padding: 18px 16px;
+            padding: 20px 18px;
             border-radius: 12px;
-            margin-bottom: 14px;
+            margin-bottom: 16px;
             display: flex;
             align-items: center;
-            gap: 12px;
-            box-shadow: 0 4px 12px rgba(10, 30, 70, 0.2);
+            gap: 14px;
+            box-shadow: 0 4px 12px rgba(10, 30, 70, 0.22);
+            border-left: 5px solid #38BDF8;
         }
         .sidebar-brand-icon {
             background-color: #FFFFFF;
-            color: #0A1E46;
-            width: 40px;
-            height: 40px;
+            color: #0A1E46 !important;
+            width: 44px;
+            height: 44px;
             border-radius: 10px;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 22px;
-            font-weight: 900;
-        }
-        .sidebar-brand-title {
-            color: #FFFFFF !important;
             font-size: 24px !important;
-            font-weight: 800 !important;
-            margin: 0 !important;
-            letter-spacing: -0.3px;
+            font-weight: 900;
+            flex-shrink: 0;
         }
         .sidebar-section-label {
-            font-size: 12px !important;
+            font-size: 13px !important;
             color: #0A1E46 !important;
             font-weight: 800 !important;
             letter-spacing: 0.8px;
@@ -1028,16 +1050,25 @@ st.markdown(
 
 
 def render_banner(titulo: str, subtitulo: str) -> None:
-    """Renderiza un banner institucional en Azul Oscuro con letras blancas de gran tamaño."""
-    st.markdown(
-        f"""
-        <div class="concialiapp-banner">
-            <h1>{titulo}</h1>
-            <p>{subtitulo}</p>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    """Renderiza un banner institucional en Azul Oscuro con título blanco de 32px y subtítulo de 18px."""
+    html_banner = (
+        f'<div class="tesora-banner">'
+        f'<span class="tesora-banner-title" style="color:#FFFFFF !important; font-size:32px !important; font-weight:800 !important;">{titulo}</span>'
+        f'<span class="tesora-banner-sub" style="color:#E2E8F0 !important; font-size:18px !important; font-weight:500 !important;">{subtitulo}</span>'
+        f'</div>'
     )
+    st.markdown(html_banner, unsafe_allow_html=True)
+
+
+def render_kpi_card(etiqueta: str, valor: object) -> None:
+    """Renderiza un recuadro KPI de alto contraste con etiqueta de 17px y número grande de 38px."""
+    html_kpi = (
+        f'<div class="tesora-kpi-card">'
+        f'<span class="tesora-kpi-label" style="color:#1E293B !important; font-size:17px !important; font-weight:700 !important;">{etiqueta}</span>'
+        f'<span class="tesora-kpi-value" style="color:#0A1E46 !important; font-size:38px !important; font-weight:800 !important;">{valor}</span>'
+        f'</div>'
+    )
+    st.markdown(html_kpi, unsafe_allow_html=True)
 
 
 # =============================================================================
@@ -1053,7 +1084,7 @@ if not st.session_state.autenticado:
     password_correcta = st.secrets.get("PASSWORD_ACCESO", "admin123")
     password = st.text_input("Contraseña:", type="password")
 
-    if st.button("Ingresar"):
+    if st.button("🔑 Ingresar a Tesora Pro", type="primary"):
         if password and password == password_correcta:
             st.session_state.autenticado = True
             st.rerun()
@@ -1094,21 +1125,29 @@ if "modulo_analisis" not in st.session_state:
 if "modulo_maestros" not in st.session_state:
     st.session_state.modulo_maestros = "Ninguno"
 
+# Procesar cualquier cambio de pestaña solicitado antes de instanciar los widgets del sidebar
+if st.session_state.get("_nav_pending"):
+    _nav = st.session_state.pop("_nav_pending")
+    if "menu_proceso" in _nav:
+        st.session_state.menu_proceso = _nav["menu_proceso"]
+    if "modulo_analisis" in _nav:
+        st.session_state.modulo_analisis = _nav["modulo_analisis"]
+    if "modulo_maestros" in _nav:
+        st.session_state.modulo_maestros = _nav["modulo_maestros"]
+
 
 # =============================================================================
 # 5. BARRA LATERAL DE NAVEGACIÓN SINCRONIZADA CON SESSION_STATE
 # =============================================================================
 with st.sidebar:
     st.markdown(
-        """
-        <div class="sidebar-brand">
-            <div class="sidebar-brand-icon">💎</div>
-            <div>
-                <div class="sidebar-brand-title">Tesora Pro</div>
-                <div style="color:#93C5FD; font-size:12px; font-weight:600; margin-top:2px;">Tesorería & Conciliación</div>
-            </div>
-        </div>
-        """,
+        '<div class="sidebar-brand">'
+        '<div class="sidebar-brand-icon">💎</div>'
+        '<div>'
+        '<span style="color:#FFFFFF !important; font-size:26px !important; font-weight:900 !important; display:block; line-height:1.15;">Tesora Pro</span>'
+        '<span style="color:#BAE6FD !important; font-size:14px !important; font-weight:600 !important; display:block; margin-top:4px;">Tesorería & Conciliación</span>'
+        '</div>'
+        '</div>',
         unsafe_allow_html=True,
     )
 
@@ -1267,31 +1306,18 @@ elif menu_proceso == "Dashboard":
 
     c1, c2, c3, c4 = st.columns(4)
     with c1:
-        with st.container(border=True):
-            st.metric(
-                label="Partidas abiertas (Banco + Libros)",
-                value=(len(res.banco_pendiente) + len(res.libros_pendiente))
-                if res
-                else (len(st.session_state.movs_banco) + len(st.session_state.movs_libros)),
-            )
+        val_abiertas = (
+            (len(res.banco_pendiente) + len(res.libros_pendiente))
+            if res
+            else (len(st.session_state.movs_banco) + len(st.session_state.movs_libros))
+        )
+        render_kpi_card("Partidas abiertas (Banco + Libros)", val_abiertas)
     with c2:
-        with st.container(border=True):
-            st.metric(
-                label="Conciliaciones guardadas",
-                value=str(len(historial_actual)),
-            )
+        render_kpi_card("Conciliaciones guardadas", len(historial_actual))
     with c3:
-        with st.container(border=True):
-            st.metric(
-                label="Movimientos conciliados (Sesión)",
-                value=len(res.pares) if res else 0,
-            )
+        render_kpi_card("Movimientos conciliados (Sesión)", len(res.pares) if res else 0)
     with c4:
-        with st.container(border=True):
-            st.metric(
-                label="Asientos anulados aislados",
-                value=len(getattr(res, "libros_anulados", [])) if res else 0,
-            )
+        render_kpi_card("Asientos anulados aislados", len(getattr(res, "libros_anulados", [])) if res else 0)
 
     col_izq, col_der = st.columns([2, 1])
     with col_izq:
@@ -1343,11 +1369,11 @@ elif menu_proceso == "Dashboard":
                             use_container_width=True,
                         ):
                             if retomar_conciliacion_historica(reg_h):
-                                st.session_state.menu_proceso = "Conciliación"
+                                ir_a_menu("Conciliación")
                                 st.rerun()
                             else:
                                 st.session_state.historial_seleccionado_idx = idx_h
-                                st.session_state.menu_proceso = "Historial"
+                                ir_a_menu("Historial")
                                 st.rerun()
                     with c_btn2:
                         if st.button(
@@ -1356,7 +1382,7 @@ elif menu_proceso == "Dashboard":
                             use_container_width=True,
                         ):
                             st.session_state.historial_seleccionado_idx = idx_h
-                            st.session_state.menu_proceso = "Historial"
+                            ir_a_menu("Historial")
                             st.rerun()
                     st.markdown("<hr style='margin:6px 0; border-color:#F1F5F9;'>", unsafe_allow_html=True)
             elif not res:
@@ -1607,11 +1633,16 @@ elif menu_proceso == "Conciliación":
         st.subheader("📈 Resultados del Cruce")
 
         kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
-        kpi1.metric("Pares Cerrados (C1/C2)", datos_resumen.get("pares_cerrados", 0))
-        kpi2.metric("Sugerencias (C3/C4)", datos_resumen.get("sugerencias", 0))
-        kpi3.metric("Banco Pendiente", datos_resumen.get("banco_pendiente", 0))
-        kpi4.metric("Libros Pendiente", datos_resumen.get("libros_pendiente", 0))
-        kpi5.metric("Asientos Anulados", datos_resumen.get("libros_anulados", 0))
+        with kpi1:
+            render_kpi_card("Pares Cerrados (C1/C2)", datos_resumen.get("pares_cerrados", 0))
+        with kpi2:
+            render_kpi_card("Sugerencias (C3/C4)", datos_resumen.get("sugerencias", 0))
+        with kpi3:
+            render_kpi_card("Banco Pendiente", datos_resumen.get("banco_pendiente", 0))
+        with kpi4:
+            render_kpi_card("Libros Pendiente", datos_resumen.get("libros_pendiente", 0))
+        with kpi5:
+            render_kpi_card("Asientos Anulados", datos_resumen.get("libros_anulados", 0))
 
         # Guardado completo en Historial (con etiqueta identificadora, movimientos crudos y consolidado completo)
         with st.container(border=True):
@@ -1895,16 +1926,20 @@ elif menu_proceso == "Historial":
 
         with st.container(border=True):
             c_m1, c_m2, c_m3, c_m4 = st.columns(4)
-            c_m1.metric("Pares Cerrados", reg_sel.get("pares_cerrados", 0))
-            c_m2.metric("Banco Pendiente", reg_sel.get("banco_pendiente", 0))
-            c_m3.metric("Libros Pendiente", reg_sel.get("libros_pendiente", 0))
-            c_m4.metric("Asientos Anulados", reg_sel.get("libros_anulados", 0))
+            with c_m1:
+                render_kpi_card("Pares Cerrados", reg_sel.get("pares_cerrados", 0))
+            with c_m2:
+                render_kpi_card("Banco Pendiente", reg_sel.get("banco_pendiente", 0))
+            with c_m3:
+                render_kpi_card("Libros Pendiente", reg_sel.get("libros_pendiente", 0))
+            with c_m4:
+                render_kpi_card("Asientos Anulados", reg_sel.get("libros_anulados", 0))
 
             col_acc1, col_acc2, col_acc3 = st.columns(3)
             with col_acc1:
                 if st.button("🔄 Retomar / Reabrir en el Motor de Conciliación", type="primary", use_container_width=True):
                     if retomar_conciliacion_historica(reg_sel):
-                        st.session_state.menu_proceso = "Conciliación"
+                        ir_a_menu("Conciliación")
                         st.rerun()
                     else:
                         st.warning(
