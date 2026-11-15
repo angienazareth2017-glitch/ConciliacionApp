@@ -500,6 +500,9 @@ elif menu_proceso == "Conciliación":
         # =====================================================================
         # OPCIÓN 1: ASISTENTE DE IA INTEGRADO (CONECTADO A OPENROUTER)
         # =====================================================================
+        # =====================================================================
+        # OPCIÓN 1: ASISTENTE DE IA INTEGRADO (CONECTADO A OPENROUTER)
+        # =====================================================================
         st.markdown("---")
         with st.expander("🤖 Asistente IA para Análisis de Conciliación (Opción 1)", expanded=False):
             st.markdown("Realice preguntas o solicite análisis sobre las partidas conciliadas y pendientes.")
@@ -513,38 +516,28 @@ elif menu_proceso == "Conciliación":
                         st.error("La librería `openai` no está instalada o configurada.")
                     else:
                         try:
-                            # Configuración del cliente apuntando a OpenRouter
                             client = OpenAI(
                                 api_key=st.secrets.get("OPENAI_API_KEY", ""),
                                 base_url=st.secrets.get("OPENAI_BASE_URL", "https://openrouter.ai/api/v1"),
                             )
                             contexto = f"Pares cerrados: {len(res.pares)}, Banco pendiente: {len(res.banco_pendiente)}, Libros pendiente: {len(res.libros_pendiente)}"
                             
-      response = client.chat.completions.create(
+                            response = client.chat.completions.create(
                                 model="openai/gpt-4o-mini",
                                 messages=[
                                     {
                                         "role": "system",
-                                        "content": (
-                                            "Eres un asistente experto en"
-                                            " contabilidad y conciliaciones"
-                                            " bancarias para empresas en"
-                                            " Venezuela. Analiza con"
-                                            " precisión los datos y responde"
-                                            " de forma ejecutiva."
-                                        ),
+                                        "content": "Eres un asistente experto en contabilidad y conciliaciones bancarias para empresas en Venezuela. Analiza con precisión los datos y responde de forma ejecutiva.",
                                     },
                                     {
                                         "role": "user",
-                                        "content": f"""Contexto financiero actual: {contexto}
-Pregunta del analista: {pregunta_ai}""",
+                                        "content": f"Contexto financiero actual: {contexto}\nPregunta del analista: {pregunta_ai}",
                                     },
                                 ],
                             )
                             st.success(response.choices[0].message.content)
                         except Exception as ai_err:
                             st.error(f"Error al conectar con la API (Verifique su API Key y base_url en st.secrets): {ai_err}")
-
         if res.sugerencias:
             st.markdown("### 💡 Sugerencias pendientes de aprobación (C3 / C4)")
             for idx, sug in enumerate(res.sugerencias):
