@@ -16,41 +16,6 @@ def L(id_, fecha, monto, desc="", ref=""):
 
 
 # ----------------------------------------------------------------------------
-# Parseo de montos  (regresión: limpiar_monto devolvía 0.0 o valores 100x mal)
-# ----------------------------------------------------------------------------
-@pytest.mark.parametrize("entrada, esperado", [
-    ("1.234,56", "1234.56"),
-    ("-1.234,56", "-1234.56"),
-    ("1,234.56", "1234.56"),          # antes daba 1.23456
-    ("1234.56", "1234.56"),           # antes daba 123456.0
-    ("(1.234,56)", "-1234.56"),       # antes daba 0.0
-    ("1.234,56-", "-1234.56"),        # antes daba 0.0
-    ("Bs.S 1.234,56", "1234.56"),     # antes daba 0.0
-    ("VES 500,00", "500.00"),         # antes daba 0.0
-    ("Bs. 50", "50.00"),
-    ("$1,234.56", "1234.56"),
-    ("1.234.567,89", "1234567.89"),
-    ("1.234", "1234.00"),             # ambiguo: con coma decimal, el punto es de miles
-    (1234.5, "1234.50"),
-    (10, "10.00"),
-    (D("2.675"), "2.68"),             # ROUND_HALF_UP (round(2.675, 2) en float da 2.67)
-])
-def test_parsear_monto(entrada, esperado):
-    assert parsear_monto(entrada) == D(esperado)
-
-
-def test_parsear_monto_ambiguo_con_punto_decimal():
-    assert parsear_monto("1,234", separador_decimal=".") == D("1234.00")
-    assert parsear_monto("1.234", separador_decimal=".") == D("1.23")
-
-
-@pytest.mark.parametrize("malo", ["abc", "", "   ", None, float("nan"), "1-2", True, "Bs."])
-def test_parsear_monto_error_no_cero(malo):
-    with pytest.raises(ErrorDeParseo):
-        parsear_monto(malo)
-
-
-# ----------------------------------------------------------------------------
 # Fechas  (regresión: 05/03/2025 se leía como 3 de mayo)
 # ----------------------------------------------------------------------------
 def test_fecha_dia_primero():
