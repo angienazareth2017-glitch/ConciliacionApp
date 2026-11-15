@@ -340,47 +340,73 @@ def neutralizar_reversos(
     return restantes, pares, sin_original
 
 
-def _detectar_anulados_libros(movimientos_libros: list[Movimiento]) -> tuple[list[Movimiento], list[tuple[Movimiento, str]]]:
+def _detectar_anulados_libros(
+    movimientos_libros: Sequence[Movimiento],
+) -> tuple[list[Movimiento], list[tuple[Movimiento, str]]]:
     """
     Identifica en los movimientos de libros aquellos asientos que se anulan entre sí
-    (mismo monto con signo opuesto y misma referencia normalizada o descripción normalizada)
     ANTES de cruzar con el banco.
+    Prioriza:
+    1) Mismo monto opuesto (+X y -X) + misma referencia (Nº documento) + misma descripción (contrapartida).
+    2) Mismo monto opuesto (+X y -X) + misma referencia (Nº documento) o misma descripción (contrapartida)
+       en fechas cercanas.
     Retorna: (libros_pendientes_reales, libros_anulados)
     """
-    pendientes_reales: list[Movimiento] = []
-    anulados: list[tuple[Movimiento, str]] = []
-    usados = set()
-    
     movs = list(movimientos_libros)
+    usados: set[str] = set()
+    anulados_map: dict[str, tuple[Movimiento, str]] = {}
+
+    # Pasada 1 (Prioridad Máxima): Coincidencia exacta de Referencia + Descripción/Contrapartida + Montos Opuestos
     for i, m1 in enumerate(movs):
         if m1.id in usados:
             continue
-        encontrado = False
         for j in range(i + 1, len(movs)):
             m2 = movs[j]
             if m2.id in usados:
                 continue
-            
-            mismo_ref = (m1.referencia_norm and m2.referencia_norm and m1.referencia_norm == m2.referencia_norm)
-            mismo_desc = (m1.descripcion_norm and m2.descripcion_norm and m1.descripcion_norm == m2.descripcion_norm)
-            
-            try:
-                v1 = float(m1.monto)
-                v2 = float(m2.monto)
-            except Exception:
+            if m1.monto + m2.monto != Decimal("0"):
                 continue
-                
-            if abs(v1 + v2) < 0.01 and (mismo_ref or mismo_desc):
-                anulados.append((m1, "Asiento Anulado"))
-                anulados.append((m2, "Asiento Anulado"))
+            mismo_ref = bool(m1.referencia_norm and m2.referencia_norm and m1.referencia_norm == m2.referencia_norm)
+            misma_desc = bool(m1.descripcion_norm and m2.descripcion_norm and m1.descripcion_norm == m2.descripcion_norm)
+            if mismo_ref and misma_desc:
                 usados.add(m1.id)
                 usados.add(m2.id)
-                encontrado = True
+                anulados_map[m1.id] = (m1, "Asiento Anulado")
+                anulados_map[m2.id] = (m2, "Asiento Anulado")
                 break
-                
-        if not encontrado and m1.id not in usados:
-            pendientes_reales.append(m1)
-            
+
+    # Pasada 2: Coincidencia de Referencia O Descripción/Contrapartida con Montos Opuestos
+    for i, m1 in enumerate(movs):
+        if m1.id in usados:
+            continue
+        mejor_j = None
+        mejor_clave = None
+        for j in range(i + 1, len(movs)):
+            m2 = movs[j]
+            if m2.id in usados:
+                continue
+            if m1.monto + m2.monto != Decimal("0"):
+                continue
+            mismo_ref = bool(m1.referencia_norm and m2.referencia_norm and m1.referencia_norm == m2.referencia_norm)
+            misma_desc = bool(m1.descripcion_norm and m2.descripcion_norm and m1.descripcion_norm == m2.descripcion_norm)
+            if not (mismo_ref or misma_desc):
+                continue
+            dias = abs((m1.fecha - m2.fecha).days)
+            # Priorizar misma referencia primero, luego menor diferencia de días
+            clave = (0 if mismo_ref else 1, dias, j)
+            if mejor_clave is None or clave < mejor_clave:
+                mejor_clave = clave
+                mejor_j = j
+
+        if mejor_j is not None:
+            m2 = movs[mejor_j]
+            usados.add(m1.id)
+            usados.add(m2.id)
+            anulados_map[m1.id] = (m1, "Asiento Anulado")
+            anulados_map[m2.id] = (m2, "Asiento Anulado")
+
+    pendientes_reales = [m for m in movs if m.id not in usados]
+    anulados = [anulados_map[m.id] for m in movs if m.id in usados]
     return pendientes_reales, anulados
 
 
@@ -577,6 +603,13 @@ def conciliar(
     _validar_ids(libros, "libros")
     advertencias: list[str] = []
 
+    banco = sorted(banco, key=_orden)
+    libros = sorted(libros, key=_orden)
+
+    # 1. Aislar y remover asientos contables anulados en libros ANTES de cualquier otra regla o cruce
+    libros, libros_anulados = _detectar_anulados_libros(libros)
+
+    # 2. Neutralizar reversos explícitos por palabra clave si está activo
     rev_b: list[tuple[Movimiento, Movimiento]] = []
     rev_l: list[tuple[Movimiento, Movimiento]] = []
     if cfg.neutralizar_reversos:
@@ -584,6 +617,9 @@ def conciliar(
             banco, cfg.ventana_reversos_dias, cfg.patron_reverso_banco)
         libros, rev_l, sin_l = neutralizar_reversos(
             libros, cfg.ventana_reversos_dias, cfg.patron_reverso_libros)
+        for m_orig, m_rev in rev_l:
+            libros_anulados.append((m_orig, "Asiento Anulado"))
+            libros_anulados.append((m_rev, "Asiento Anulado"))
         for nombre, sin in (("banco", sin_b), ("libros", sin_l)):
             if sin:
                 advertencias.append(
@@ -591,13 +627,7 @@ def conciliar(
                     f"su original; se dejan en el cruce normal: {', '.join(m.id for m in sin[:5])}"
                 )
 
-    banco = sorted(banco, key=_orden)
-    libros = sorted(libros, key=_orden)
-
-    # 1. Aislar y remover asientos contables anulados ANTES de realizar los cruces bancarios
-    libros, libros_anulados = _detectar_anulados_libros(libros)
-
-    # 2. Ejecutar cruces
+    # 3. Ejecutar cruces contra el banco únicamente con las partidas reales activas
     c1, banco, libros = _cruzar_exacto(banco, libros, 0, "C1", exigir_referencia=True)
     c2, banco, libros = _cruzar_exacto(banco, libros, cfg.tolerancia_dias_c2, "C2", True)
     if not cfg.exigir_referencia_c2:
