@@ -939,29 +939,28 @@ st.markdown(
             font-weight: 700 !important;
         }
 
-        /* Banner Superior Azul Oscuro Corporativo (garantiza letras blancas y grandes) */
+        /* Banner Superior Azul Oscuro Corporativo */
         .tesora-banner {
-            background: linear-gradient(135deg, #0A1E46 0%, #15357A 100%);
+            background: linear-gradient(135deg, #071636 0%, #0F2C67 60%, #153E85 100%);
             padding: 28px 32px;
             border-radius: 14px;
             margin-bottom: 24px;
-            box-shadow: 0 6px 18px rgba(10, 30, 70, 0.18);
+            box-shadow: 0 8px 22px rgba(7, 22, 54, 0.22);
             border-left: 6px solid #38BDF8;
         }
         .tesora-banner .tesora-banner-title,
-        .tesora-banner .tesora-banner-title p,
-        .tesora-banner .tesora-banner-title span {
+        .tesora-banner .tesora-banner-title * {
             color: #FFFFFF !important;
             font-size: 32px !important;
             font-weight: 800 !important;
             line-height: 1.25 !important;
             margin: 0 0 10px 0 !important;
             display: block;
+            text-shadow: 0 2px 4px rgba(0, 0, 0, 0.25);
         }
         .tesora-banner .tesora-banner-sub,
-        .tesora-banner .tesora-banner-sub p,
-        .tesora-banner .tesora-banner-sub span {
-            color: #E2E8F0 !important;
+        .tesora-banner .tesora-banner-sub * {
+            color: #E0F2FE !important;
             font-size: 18px !important;
             font-weight: 500 !important;
             line-height: 1.45 !important;
@@ -979,7 +978,8 @@ st.markdown(
             box-shadow: 0 4px 12px rgba(10, 30, 70, 0.06);
             margin-bottom: 16px;
         }
-        .tesora-kpi-label {
+        .tesora-kpi-card .tesora-kpi-label,
+        .tesora-kpi-card .tesora-kpi-label * {
             color: #1E293B !important;
             font-size: 17px !important;
             font-weight: 700 !important;
@@ -987,7 +987,8 @@ st.markdown(
             line-height: 1.35 !important;
             display: block;
         }
-        .tesora-kpi-value {
+        .tesora-kpi-card .tesora-kpi-value,
+        .tesora-kpi-card .tesora-kpi-value * {
             color: #0A1E46 !important;
             font-size: 38px !important;
             font-weight: 800 !important;
@@ -1010,30 +1011,15 @@ st.markdown(
             font-weight: 700 !important;
         }
 
-        /* Insignia Tesora Pro en la barra lateral */
+        /* Insignia Imponente TESORA PRO en la barra lateral */
         .sidebar-brand {
-            background: linear-gradient(135deg, #0A1E46 0%, #15357A 100%);
-            padding: 20px 18px;
-            border-radius: 12px;
-            margin-bottom: 16px;
-            display: flex;
-            align-items: center;
-            gap: 14px;
-            box-shadow: 0 4px 12px rgba(10, 30, 70, 0.22);
-            border-left: 5px solid #38BDF8;
-        }
-        .sidebar-brand-icon {
-            background-color: #FFFFFF;
-            color: #0A1E46 !important;
-            width: 44px;
-            height: 44px;
-            border-radius: 10px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 24px !important;
-            font-weight: 900;
-            flex-shrink: 0;
+            background: linear-gradient(135deg, #06122E 0%, #0D2558 55%, #163C85 100%);
+            padding: 22px 18px;
+            border-radius: 14px;
+            margin-bottom: 18px;
+            box-shadow: 0 8px 20px rgba(6, 18, 46, 0.28);
+            border: 1px solid rgba(56, 189, 248, 0.35);
+            border-left: 6px solid #F59E0B;
         }
         .sidebar-section-label {
             font-size: 13px !important;
@@ -1053,8 +1039,8 @@ def render_banner(titulo: str, subtitulo: str) -> None:
     """Renderiza un banner institucional en Azul Oscuro con título blanco de 32px y subtítulo de 18px."""
     html_banner = (
         f'<div class="tesora-banner">'
-        f'<span class="tesora-banner-title" style="color:#FFFFFF !important; font-size:32px !important; font-weight:800 !important;">{titulo}</span>'
-        f'<span class="tesora-banner-sub" style="color:#E2E8F0 !important; font-size:18px !important; font-weight:500 !important;">{subtitulo}</span>'
+        f'<div class="tesora-banner-title" style="color:#FFFFFF; font-size:32px; font-weight:800; margin-bottom:8px;">{titulo}</div>'
+        f'<div class="tesora-banner-sub" style="color:#E0F2FE; font-size:18px; font-weight:500;">{subtitulo}</div>'
         f'</div>'
     )
     st.markdown(html_banner, unsafe_allow_html=True)
@@ -1064,8 +1050,8 @@ def render_kpi_card(etiqueta: str, valor: object) -> None:
     """Renderiza un recuadro KPI de alto contraste con etiqueta de 17px y número grande de 38px."""
     html_kpi = (
         f'<div class="tesora-kpi-card">'
-        f'<span class="tesora-kpi-label" style="color:#1E293B !important; font-size:17px !important; font-weight:700 !important;">{etiqueta}</span>'
-        f'<span class="tesora-kpi-value" style="color:#0A1E46 !important; font-size:38px !important; font-weight:800 !important;">{valor}</span>'
+        f'<div class="tesora-kpi-label" style="color:#1E293B; font-size:17px; font-weight:700; margin-bottom:8px;">{etiqueta}</div>'
+        f'<div class="tesora-kpi-value" style="color:#0A1E46; font-size:38px; font-weight:800;">{valor}</div>'
         f'</div>'
     )
     st.markdown(html_kpi, unsafe_allow_html=True)
@@ -1078,7 +1064,7 @@ if "autenticado" not in st.session_state:
     st.session_state.autenticado = False
 
 if not st.session_state.autenticado:
-    render_banner("🔒 Tesora Pro", "Sistema Corporativo de Conciliación Bancaria, Mayor Analítico y Tesorería")
+    render_banner("🔒 TESORA PRO", "Sistema Corporativo de Conciliación Bancaria, Mayor Analítico y Tesorería")
     st.markdown("Por favor, ingrese su contraseña para continuar.")
 
     password_correcta = st.secrets.get("PASSWORD_ACCESO", "admin123")
@@ -1137,16 +1123,29 @@ if st.session_state.get("_nav_pending"):
 
 
 # =============================================================================
-# 5. BARRA LATERAL DE NAVEGACIÓN SINCRONIZADA CON SESSION_STATE
+# 5. BARRA LATERAL DE NAVEGACIÓN CON LOGO VECTORIAL IMPONENTE TESORA PRO
 # =============================================================================
 with st.sidebar:
+    # Logo SVG vectorial + tarjeta azul marino con dorado y blanco puro (inmune a sobreescrituras CSS de Streamlit)
     st.markdown(
         '<div class="sidebar-brand">'
-        '<div class="sidebar-brand-icon">💎</div>'
-        '<div>'
-        '<span style="color:#FFFFFF !important; font-size:26px !important; font-weight:900 !important; display:block; line-height:1.15;">Tesora Pro</span>'
-        '<span style="color:#BAE6FD !important; font-size:14px !important; font-weight:600 !important; display:block; margin-top:4px;">Tesorería & Conciliación</span>'
-        '</div>'
+        '<svg width="100%" height="68" viewBox="0 0 260 68" xmlns="http://www.w3.org/2000/svg">'
+        '<defs>'
+        '<linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">'
+        '<stop offset="0%" stop-color="#FDE68A" />'
+        '<stop offset="50%" stop-color="#F59E0B" />'
+        '<stop offset="100%" stop-color="#D97706" />'
+        '</linearGradient>'
+        '</defs>'
+        '<rect x="0" y="6" width="52" height="52" rx="12" fill="#FFFFFF" />'
+        '<polygon points="26,15 41,26 26,49 11,26" fill="#0A1E46" />'
+        '<polygon points="26,15 41,26 26,30" fill="#2563EB" />'
+        '<polygon points="26,15 11,26 26,30" fill="#60A5FA" />'
+        '<text x="64" y="34" fill="#FFFFFF" font-family="Segoe UI, Arial, sans-serif" font-size="25" font-weight="900" letter-spacing="0.8">TESORA</text>'
+        '<rect x="175" y="14" width="54" height="25" rx="6" fill="url(#goldGrad)" />'
+        '<text x="202" y="32" fill="#06122E" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="900" text-anchor="middle" letter-spacing="1">PRO</text>'
+        '<text x="64" y="55" fill="#93C5FD" font-family="Segoe UI, Arial, sans-serif" font-size="13.5" font-weight="700" letter-spacing="0.5">TESORERÍA &amp; CONCILIACIÓN</text>'
+        '</svg>'
         '</div>',
         unsafe_allow_html=True,
     )
