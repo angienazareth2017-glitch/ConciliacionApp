@@ -219,15 +219,13 @@ elif menu_proceso == "Dashboard":
         "<p style='color: #64748B; margin-top: -15px;'>Resumen general de conciliaciones bancarias</p>",
         unsafe_allow_html=True,
     )
-
-    # Banner de bienvenida estilo Opción 2
+# Banner de bienvenida estilo Opción 2
     st.success(
-        "🚀 **Sistema de Conciliación Inteligente Activo**
-
-*Bienvenido al entorno de trabajo multimoneda. Utilice el menú lateral para iniciar la importación o consultar las tasas.*",
+        "🚀 **Sistema de Conciliación Inteligente Activo** — Bienvenido al"
+        " entorno de trabajo multimoneda. Utilice el menú lateral para iniciar"
+        " la importación o consultar las tasas.",
         icon="💼",
     )
-
     res = st.session_state.resultado_conciliacion
     c1, c2, c3, c4 = st.columns(4)
 
