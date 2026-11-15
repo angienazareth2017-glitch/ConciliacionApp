@@ -1,159 +1,87 @@
-"""
-tasas.py - Tabla de tasas de cambio para Bs. / USD / EUR.
+import pandas as pd
+import streamlit as st
+from tasas import TablaTasas, TasaNoDisponible
 
-Diferencias clave con el código anterior:
-    * NO existe una tasa por defecto. Si no hay tasa válida para una fecha,
-      se lanza TasaNoDisponible. Un valor inventado (el 37.03 fijo) contamina
-      todos los montos convertidos sin que nadie lo note.
-    * Una fecha sin tasa (fin de semana, feriado) usa la última tasa ANTERIOR,
-      hasta `max_antiguedad_dias`, y lo deja registrado (`arrastrada`).
-      Nunca usa una tasa posterior a la fecha consultada.
-    * Cada conversión puede devolver las tasas exactas que usó (auditoría).
-    * Se admiten varios tipos de tasa (p. ej. "BCV", "MERCADO") por moneda.
-    * La conversión USD <-> EUR se hace por tasa cruzada vía bolívares.
+# Suponiendo que ya estás dentro de la app principal autenticada...
+st.subheader("📁 Carga Masiva de Tasas BCV desde Excel")
 
-Convención: `valor` = bolívares por 1 unidad de la moneda extranjera.
-"""
-from __future__ import annotations
+st.markdown("""
+Sube un archivo Excel (`.xlsx` o `.xls`) que contenga al menos una columna con la **fecha** y columnas con las tasas de cambio para **USD** y/o **EUR**.
+""")
 
-from bisect import bisect_right, insort
-from dataclasses import dataclass
-from datetime import date
-from decimal import Decimal, ROUND_HALF_UP
-from typing import Any, Iterable, Optional
+# 1. Componente para subir el archivo
+archivo_subido = st.file_uploader(
+    "Selecciona tu archivo Excel de tasas", type=["xlsx", "xls"]
+)
 
-from conciliar import CENTAVO, ErrorDeParseo, _es_vacio, parsear_fecha, parsear_monto, parsear_numero
+if archivo_subido is not None:
+  try:
+    # Leemos el Excel usando pandas
+    df_tasas = pd.read_excel(archivo_subido)
 
-MONEDA_BASE = "VES"
-MONEDAS_REPORTE = ("VES", "USD", "EUR")
+    st.write("🔍 **Vista previa de los datos cargados:**")
+    st.dataframe(df_tasas.head())
 
+    # 2. Configuración de columnas para mapear el Excel con tu clase TablaTasas
+    st.markdown("---")
+    st.write("⚙️ **Mapeo de Columnas**")
 
-class TasaNoDisponible(LookupError):
-    """No hay una tasa válida para la fecha / moneda / tipo pedidos."""
+    columnas_disponibles = list(df_tasas.columns)
 
+    col1, col2, col3 = st.columns(3)
+    with col1:
+      col_fecha = st.selectbox(
+          "Columna de Fecha", columnas_disponibles, index=0
+      )
+    with col2:
+      col_usd = st.selectbox(
+          "Columna Tasa USD (Opcional)", ["Ninguna"] + columnas_disponibles
+      )
+    with col3:
+      col_eur = st.selectbox(
+          "Columna Tasa EUR (Opcional)", ["Ninguna"] + columnas_disponibles
+      )
 
-@dataclass(frozen=True)
-class TasaAplicada:
-    moneda: str
-    tipo: str
-    valor: Decimal  # Bs. por 1 unidad de `moneda`
-    fecha_tasa: date  # fecha de la tasa realmente usada
-    fecha_consulta: date  # fecha para la que se pidió
-    fuente: str
+    # Diccionario dinámico para indicar qué columnas mapear a la clase TablaTasas
+    columnas_moneda_map = {}
+    if col_usd != "Ninguna":
+      columnas_moneda_map["USD"] = col_usd
+    if col_eur != "Ninguna":
+      columnas_moneda_map["EUR"] = col_eur
 
-    @property
-    def arrastrada(self) -> bool:
-        return self.fecha_tasa != self.fecha_consulta
+    # 3. Botón para ejecutar la carga masiva
+    if st.button("Procesar y Cargar Tasas al Sistema"):
+      if not columnas_moneda_map:
+        st.warning("⚠️ Debes seleccionar al menos una columna de moneda (USD o EUR).")
+      else:
+        # Aseguramos que la tabla esté inicializada en el session_state
+        if "tabla_tasas" not in st.session_state:
+          st.session_state.tabla_tasas = TablaTasas(max_antiguedad_dias=7)
 
-    @property
-    def dias_arrastre(self) -> int:
-        return (self.fecha_consulta - self.fecha_tasa).days
+        # Convertimos las filas del DataFrame a un iterable de diccionarios
+        filas = df_tasas.to_dict(orient="records")
 
+        # Llamamos al método nativo de tu archivo tasas.py
+        errores = st.session_state.tabla_tasas.cargar_filas(
+            filas=filas,
+            columna_fecha=col_fecha,
+            columnas_moneda=columnas_moneda_map,
+            tipo="BCV",
+            fuente=archivo_subido.name,
+        )
 
-@dataclass
-class ErrorTasa:
-    fila: int
-    columna: str
-    valor: Any
-    motivo: str
+        st.success("¡Proceso de carga masiva finalizado!")
 
+        # Reportar resultados y posibles errores de formato si los hay
+        if errores:
+          st.warning(
+              f"Se encontraron {len(errores)} filas con advertencias o errores"
+              " que fueron omitidas:"
+          )
+          df_errores = pd.DataFrame([vars(e) for e in errores])
+          st.dataframe(df_errores)
+        else:
+          st.success("🎉 ¡Todas las tasas se cargaron sin ningún error!")
 
-class TablaTasas:
-    def __init__(self, max_antiguedad_dias: int = 7) -> None:
-        self.max_antiguedad_dias = max_antiguedad_dias
-        self._fechas: dict[tuple[str, str], list[date]] = {}
-        self._valores: dict[tuple[str, str, date], tuple[Decimal, str]] = {}
-
-    # ---- carga ----------------------------------------------------------
-    def agregar(self, fecha: Any, moneda: str, valor: Any, tipo: str = "BCV", fuente: str = "manual") -> None:
-        f = parsear_fecha(fecha)
-        v = valor if isinstance(valor, Decimal) else parsear_numero(valor, un_separador_es_decimal=True)
-        if v <= 0:
-            raise ValueError(f"La tasa debe ser mayor que cero ({moneda} {f}: {valor!r}).")
-        moneda = moneda.upper()
-        if moneda == MONEDA_BASE:
-            raise ValueError("La moneda base (VES) no lleva tasa.")
-        clave = (tipo, moneda)
-        fechas = self._fechas.setdefault(clave, [])
-        if (tipo, moneda, f) not in self._valores:
-            insort(fechas, f)
-        self._valores[(tipo, moneda, f)] = (v, fuente)
-
-    def cargar_filas(
-        self,
-        filas: Iterable[dict],
-        columna_fecha: str,
-        columnas_moneda: dict[str, str],
-        tipo: str = "BCV",
-        fuente: str = "archivo",
-    ) -> list[ErrorTasa]:
-        """
-        Carga una tabla tipo  Fecha | USD | EUR  con columnas_moneda={"USD": "Dolar", "EUR": "Euro"}.
-        Una celda vacía se ignora; una celda ilegible se reporta (no se pone en 0).
-        """
-        errores: list[ErrorTasa] = []
-        for n, fila in enumerate(filas, start=1):
-            try:
-                f = parsear_fecha(fila.get(columna_fecha))
-            except ErrorDeParseo as e:
-                errores.append(ErrorTasa(n, columna_fecha, fila.get(columna_fecha), str(e)))
-                continue
-            for moneda, col in columnas_moneda.items():
-                celda = fila.get(col)
-                if _es_vacio(celda):
-                    continue
-                try:
-                    self.agregar(f, moneda, celda, tipo, fuente)
-                except (ErrorDeParseo, ValueError) as e:
-                    errores.append(ErrorTasa(n, col, celda, str(e)))
-        return errores
-
-    # ---- consulta -------------------------------------------------------
-    def obtener(self, fecha: Any, moneda: str, tipo: str = "BCV") -> TasaAplicada:
-        f = parsear_fecha(fecha)
-        moneda = moneda.upper()
-        fechas = self._fechas.get((tipo, moneda))
-        if not fechas:
-            raise TasaNoDisponible(f"No hay tasas cargadas para {moneda} ({tipo}).")
-        i = bisect_right(fechas, f) - 1
-        if i < 0:
-            raise TasaNoDisponible(
-                f"No hay tasa de {moneda} ({tipo}) en o antes de {f}; la primera es del {fechas[0]}."
-            )
-        f_tasa = fechas[i]
-        if (f - f_tasa).days > self.max_antiguedad_dias:
-            raise TasaNoDisponible(
-                f"La última tasa de {moneda} ({tipo}) anterior a {f} es del {f_tasa}, "
-                f"con más de {self.max_antiguedad_dias} días de antigüedad."
-            )
-        valor, fuente = self._valores[(tipo, moneda, f_tasa)]
-        return TasaAplicada(moneda, tipo, valor, f_tasa, f, fuente)
-
-    # ---- conversión -----------------------------------------------------
-    def convertir_con_detalle(
-        self, monto: Any, desde: str, a: str, fecha: Any, tipo: str = "BCV"
-    ) -> tuple[Decimal, tuple[TasaAplicada, ...]]:
-        """Devuelve (monto convertido a 2 decimales, tasas usadas)."""
-        desde, a = desde.upper(), a.upper()
-        m = parsear_monto(monto)
-        if desde == a:
-            return m, ()
-        usadas: list[TasaAplicada] = []
-        en_bs = m
-        if desde != MONEDA_BASE:
-            t = self.obtener(fecha, desde, tipo)
-            usadas.append(t)
-            en_bs = m * t.valor
-        resultado = en_bs
-        if a != MONEDA_BASE:
-            t = self.obtener(fecha, a, tipo)
-            usadas.append(t)
-            resultado = en_bs / t.valor
-        return resultado.quantize(CENTAVO, rounding=ROUND_HALF_UP), tuple(usadas)
-
-    def convertir(self, monto: Any, desde: str, a: str, fecha: Any, tipo: str = "BCV") -> Decimal:
-        return self.convertir_con_detalle(monto, desde, a, fecha, tipo)[0]
-
-    def tres_monedas(self, monto: Any, moneda: str, fecha: Any, tipo: str = "BCV") -> dict[str, Decimal]:
-        """{'VES': ..., 'USD': ..., 'EUR': ...} para un monto en cualquiera de las tres."""
-        return {m: self.convertir(monto, moneda, m, fecha, tipo) for m in MONEDAS_REPORTE}
+  except Exception as e:
+    st.error(f"Error al leer el archivo Excel: {e}")
