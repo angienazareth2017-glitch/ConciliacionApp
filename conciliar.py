@@ -1,5 +1,6 @@
 """
 conciliar.py - Motor de conciliación (núcleo puro).
+Incluye detección y aislamiento automático de asientos anulados en libros.
 """
 from __future__ import annotations
 
@@ -257,7 +258,8 @@ class Resultado:
     libros_pendiente: list[Movimiento]
     reversos_banco: list[tuple[Movimiento, Movimiento]]
     reversos_libros: list[tuple[Movimiento, Movimiento]]
-    advertencias: list[str]
+    libros_anulados: list[tuple[Movimiento, str]] = field(default_factory=list)
+    advertencias: list[str] = field(default_factory=list)
 
     def resumen(self) -> dict[str, int]:
         por_regla: dict[str, int] = defaultdict(int)
@@ -269,6 +271,7 @@ class Resultado:
             "sugerencias": len(self.sugerencias),
             "banco_pendiente": len(self.banco_pendiente),
             "libros_pendiente": len(self.libros_pendiente),
+            "libros_anulados": len(self.libros_anulados),
             "reversos_neutralizados": len(self.reversos_banco) + len(self.reversos_libros),
         }
 
@@ -335,6 +338,49 @@ def neutralizar_reversos(
     restantes = [m for m in movs if m.id not in usados]
     sin_original = [m for m in restantes if m.id in es_rev]
     return restantes, pares, sin_original
+
+
+def _detectar_anulados_libros(movimientos_libros: list[Movimiento]) -> tuple[list[Movimiento], list[tuple[Movimiento, str]]]:
+    """
+    Identifica en los movimientos de libros pendientes aquellos asientos que se anulan entre sí
+    (mismo monto con signo opuesto y misma referencia o descripción).
+    Retorna: (libros_pendientes_reales, libros_anulados)
+    """
+    pendientes_reales: list[Movimiento] = []
+    anulados: list[tuple[Movimiento, str]] = []
+    usados = set()
+    
+    movs = list(movimientos_libros)
+    for i, m1 in enumerate(movs):
+        if id(m1) in usados:
+            continue
+        encontrado = False
+        for j in range(i + 1, len(movs)):
+            m2 = movs[j]
+            if id(m2) in usados:
+                continue
+            
+            mismo_ref = (m1.referencia_norm and m2.referencia_norm and m1.referencia_norm == m2.referencia_norm)
+            mismo_desc = (m1.descripcion_norm and m2.descripcion_norm and m1.descripcion_norm == m2.descripcion_norm)
+            
+            try:
+                v1 = float(m1.monto)
+                v2 = float(m2.monto)
+            except Exception:
+                continue
+                
+            if abs(v1 + v2) < 0.01 and (mismo_ref or mismo_desc):
+                anulados.append((m1, "Asiento Anulado"))
+                anulados.append((m2, "Asiento Anulado"))
+                usados.add(id(m1))
+                usados.add(id(m2))
+                encontrado = True
+                break
+                
+        if not encontrado and id(m1) not in usados:
+            pendientes_reales.append(m1)
+            
+    return pendientes_reales, anulados
 
 
 def _validar_ids(movs: Sequence[Movimiento], nombre: str) -> None:
@@ -560,13 +606,17 @@ def conciliar(
         bloqueados_l={m.id for s in c3 for m in s.libros},
     )
 
+    # Detección y aislamiento de asientos anulados en los pendientes de libros restantes
+    libros_pend_reales, libros_anulados = _detectar_anulados_libros(libros)
+
     return Resultado(
         pares=c1 + c2,
         sugerencias=c3 + c4,
         banco_pendiente=banco,
-        libros_pendiente=libros,
+        libros_pendiente=libros_pend_reales,
         reversos_banco=rev_b,
         reversos_libros=rev_l,
+        libros_anulados=libros_anulados,
         advertencias=advertencias,
     )
 
