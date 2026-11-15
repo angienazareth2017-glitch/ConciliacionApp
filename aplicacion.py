@@ -1011,15 +1011,17 @@ st.markdown(
             font-weight: 700 !important;
         }
 
-        /* Insignia Imponente TESORA PRO en la barra lateral */
+        @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,600;0,700;1,400;1,600&display=swap');
+
+        /* Insignia Elegante y Femenina Tesora Pro en la barra lateral */
         .sidebar-brand {
-            background: linear-gradient(135deg, #06122E 0%, #0D2558 55%, #163C85 100%);
-            padding: 22px 18px;
-            border-radius: 14px;
+            background: linear-gradient(135deg, #09193A 0%, #132B5E 55%, #1E3F7F 100%);
+            padding: 20px 16px;
+            border-radius: 18px;
             margin-bottom: 18px;
-            box-shadow: 0 8px 20px rgba(6, 18, 46, 0.28);
-            border: 1px solid rgba(56, 189, 248, 0.35);
-            border-left: 6px solid #F59E0B;
+            box-shadow: 0 8px 22px rgba(9, 25, 58, 0.22);
+            border: 1px solid rgba(243, 198, 182, 0.45);
+            border-left: 5px solid #E8B4B8;
         }
         .sidebar-section-label {
             font-size: 13px !important;
@@ -1064,7 +1066,7 @@ if "autenticado" not in st.session_state:
     st.session_state.autenticado = False
 
 if not st.session_state.autenticado:
-    render_banner("🔒 TESORA PRO", "Sistema Corporativo de Conciliación Bancaria, Mayor Analítico y Tesorería")
+    render_banner("✨ Tesora Pro", "Sistema Corporativo de Conciliación Bancaria, Mayor Analítico y Tesorería")
     st.markdown("Por favor, ingrese su contraseña para continuar.")
 
     password_correcta = st.secrets.get("PASSWORD_ACCESO", "admin123")
@@ -1126,25 +1128,29 @@ if st.session_state.get("_nav_pending"):
 # 5. BARRA LATERAL DE NAVEGACIÓN CON LOGO VECTORIAL IMPONENTE TESORA PRO
 # =============================================================================
 with st.sidebar:
-    # Logo SVG vectorial + tarjeta azul marino con dorado y blanco puro (inmune a sobreescrituras CSS de Streamlit)
+    # Logo SVG vectorial delicado y femenino (Oro Rosa / Champagne + Serif Elegante + Subtítulo en Cursiva)
     st.markdown(
         '<div class="sidebar-brand">'
-        '<svg width="100%" height="68" viewBox="0 0 260 68" xmlns="http://www.w3.org/2000/svg">'
+        '<svg width="100%" height="72" viewBox="0 0 265 72" xmlns="http://www.w3.org/2000/svg">'
         '<defs>'
-        '<linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">'
-        '<stop offset="0%" stop-color="#FDE68A" />'
-        '<stop offset="50%" stop-color="#F59E0B" />'
-        '<stop offset="100%" stop-color="#D97706" />'
+        '<linearGradient id="roseGoldGrad" x1="0%" y1="0%" x2="100%" y2="100%">'
+        '<stop offset="0%" stop-color="#FCE7F3" />'
+        '<stop offset="50%" stop-color="#F5D0C5" />'
+        '<stop offset="100%" stop-color="#E8B4B8" />'
+        '</linearGradient>'
+        '<linearGradient id="iconSoftGrad" x1="0%" y1="0%" x2="100%" y2="100%">'
+        '<stop offset="0%" stop-color="#FFFFFF" />'
+        '<stop offset="100%" stop-color="#FFF1F2" />'
         '</linearGradient>'
         '</defs>'
-        '<rect x="0" y="6" width="52" height="52" rx="12" fill="#FFFFFF" />'
-        '<polygon points="26,15 41,26 26,49 11,26" fill="#0A1E46" />'
-        '<polygon points="26,15 41,26 26,30" fill="#2563EB" />'
-        '<polygon points="26,15 11,26 26,30" fill="#60A5FA" />'
-        '<text x="64" y="34" fill="#FFFFFF" font-family="Segoe UI, Arial, sans-serif" font-size="25" font-weight="900" letter-spacing="0.8">TESORA</text>'
-        '<rect x="175" y="14" width="54" height="25" rx="6" fill="url(#goldGrad)" />'
-        '<text x="202" y="32" fill="#06122E" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="900" text-anchor="middle" letter-spacing="1">PRO</text>'
-        '<text x="64" y="55" fill="#93C5FD" font-family="Segoe UI, Arial, sans-serif" font-size="13.5" font-weight="700" letter-spacing="0.5">TESORERÍA &amp; CONCILIACIÓN</text>'
+        '<rect x="2" y="8" width="54" height="54" rx="27" fill="url(#iconSoftGrad)" stroke="#E8B4B8" stroke-width="1.5" />'
+        '<path d="M29 17 C32 26, 36 30, 45 33 C36 36, 32 40, 29 49 C26 40, 22 36, 13 33 C22 30, 26 26, 29 17 Z" fill="#0F295E" />'
+        '<path d="M29 22 C31 28, 33 30, 39 33 C33 36, 31 38, 29 44 C27 38, 25 36, 19 33 C25 30, 27 28, 29 22 Z" fill="#E8B4B8" />'
+        '<circle cx="42" cy="21" r="2.2" fill="#E8B4B8" />'
+        '<text x="68" y="36" fill="#FFFFFF" font-family="Playfair Display, Georgia, Times New Roman, serif" font-size="28" font-weight="700" letter-spacing="0.4">Tesora</text>'
+        '<rect x="166" y="16" width="48" height="24" rx="12" fill="url(#roseGoldGrad)" />'
+        '<text x="190" y="33" fill="#09193A" font-family="Playfair Display, Georgia, serif" font-size="14.5" font-weight="700" font-style="italic" text-anchor="middle" letter-spacing="0.5">Pro</text>'
+        '<text x="68" y="57" fill="#F5D0C5" font-family="Playfair Display, Georgia, Times New Roman, serif" font-size="15.5" font-style="italic" font-weight="400" letter-spacing="0.3">Tesorería &amp; Conciliación</text>'
         '</svg>'
         '</div>',
         unsafe_allow_html=True,
