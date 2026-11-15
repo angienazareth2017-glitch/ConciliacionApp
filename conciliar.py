@@ -7,7 +7,6 @@ import time
 from datetime import date
 from decimal import Decimal as D
 
-import pytest
 
 import tasas
 from conciliar import (
