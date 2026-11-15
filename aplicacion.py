@@ -8,7 +8,7 @@ import pandas as pd
 import streamlit as st
 
 # Importación de tus motores lógicos locales
-from conciliar import (
+ (
     Config,
     ErrorDeParseo,
     calcular_cuadre,
