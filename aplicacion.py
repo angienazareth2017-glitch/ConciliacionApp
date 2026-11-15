@@ -1,12 +1,12 @@
 """
 aplicacion.py - Aplicación web principal en Streamlit para el 
 Sistema de Conciliación y Tesorería Multidivisa con:
-- Aislamiento previo de Asientos Anulados.
-- Clasificación de Naturaleza Contable (distinguiendo Transferencias entre Cuentas Propias,
-  Ingresos por Ventas/Clientes, Ingresos Bancarios/Intereses, Devoluciones y Egresos Operativos).
-- Reporte Excel Consolidado con peso porcentual (%) por partida sobre Total Ingresos y Total Egresos,
-  fila de Totales y pestañas de Top / Distribución Porcentual.
-- Asistente IA conectado a datos reales del Mayor y exportación directa a Word (.docx) y Excel (.xlsx).
+- Navegación interactiva real en Dashboard (Acciones Rápidas y Conciliaciones Recientes accionables).
+- Historial Persistente Completo: guarda el consolidado y los movimientos base, permitiendo
+  ver el consolidado, editarlo en vivo (st.data_editor), descargarlo en Excel o retomar/reabrir
+  cualquier conciliación anterior en el motor.
+- Aislamiento previo de Asientos Anulados y clasificación de Naturaleza Contable (Cuentas Propias vs Ventas).
+- Exportación del Resumen IA en Word (.docx) y Excel (.xlsx) con distribución porcentual (%).
 """
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ import os
 import re
 import zipfile
 from datetime import datetime
+from decimal import Decimal
 from xml.sax.saxutils import escape as xml_escape
 
 import pandas as pd
@@ -25,6 +26,7 @@ import streamlit as st
 from conciliar import (
     Config,
     ErrorDeParseo,
+    Movimiento,
     calcular_cuadre,
     cargar_movimientos,
     conciliar,
@@ -38,10 +40,10 @@ except ImportError:
     OpenAI = None
 
 # =============================================================================
-# 1. CONFIGURACIÓN INICIAL DE LA PÁGINA Y PERSISTENCIA
+# 1. CONFIGURACIÓN INICIAL DE LA PÁGINA Y PERSISTENCIA COMPLETA
 # =============================================================================
 st.set_page_config(
-    page_title="Conciliación - AI Reconciliation",
+    page_title="Tesora Pro - Sistema de Conciliación y Tesorería",
     page_icon="📊",
     layout="wide",
 )
@@ -53,20 +55,82 @@ def cargar_historial_disco() -> list[dict]:
     if os.path.exists(HISTORIAL_FILE):
         try:
             with open(HISTORIAL_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+                return data if isinstance(data, list) else []
         except Exception:
             return []
     return []
 
 
+def guardar_lista_historial_disco(historial: list[dict]) -> None:
+    try:
+        with open(HISTORIAL_FILE, "w", encoding="utf-8") as f:
+            json.dump(historial, f, ensure_ascii=False, indent=2, default=str)
+    except Exception:
+        pass
+
+
 def guardar_en_historial(resumen_dict: dict) -> None:
     historial = cargar_historial_disco()
     historial.insert(0, resumen_dict)
+    guardar_lista_historial_disco(historial)
+
+
+def serializar_movimiento(m: Movimiento) -> dict:
+    return {
+        "id": str(m.id),
+        "origen": str(m.origen),
+        "fecha": m.fecha.isoformat() if hasattr(m.fecha, "isoformat") else str(m.fecha),
+        "monto": str(m.monto),
+        "descripcion": str(m.descripcion),
+        "referencia": str(m.referencia),
+        "moneda": str(getattr(m, "moneda", "VES")),
+    }
+
+
+def deserializar_movimiento(d: dict) -> Movimiento:
+    return Movimiento(
+        id=str(d.get("id", "")),
+        origen=str(d.get("origen", "banco")),
+        fecha=d.get("fecha", "2026-01-01"),
+        monto=Decimal(str(d.get("monto", "0"))),
+        descripcion=str(d.get("descripcion", "")),
+        referencia=str(d.get("referencia", "")),
+        moneda=str(d.get("moneda", "VES")),
+    )
+
+
+def ir_a_menu(destino: str) -> None:
+    """Cambia de pestaña programáticamente desde cualquier botón de la app."""
+    st.session_state.menu_proceso = destino
+    st.session_state.modulo_analisis = "Resumen histórico"
+    st.session_state.modulo_maestros = "Ninguno"
+
+
+def retomar_conciliacion_historica(reg: dict) -> bool:
+    """
+    Restaura en memoria una conciliación guardada en el historial para poder
+    editarla, aprobar sugerencias o volver a cruzarla en el motor.
+    """
     try:
-        with open(HISTORIAL_FILE, "w", encoding="utf-8") as f:
-            json.dump(historial, f, ensure_ascii=False, indent=4)
+        movs_b_raw = reg.get("movs_banco_raw", [])
+        movs_l_raw = reg.get("movs_libros_raw", [])
+        if movs_b_raw and movs_l_raw:
+            st.session_state.movs_banco = [deserializar_movimiento(x) for x in movs_b_raw]
+            st.session_state.movs_libros = [deserializar_movimiento(x) for x in movs_l_raw]
+            tol = int(reg.get("tolerancia_c2", 3))
+            cfg = Config(tolerancia_dias_c2=tol)
+            st.session_state.resultado_conciliacion = conciliar(
+                st.session_state.movs_banco,
+                st.session_state.movs_libros,
+                cfg,
+            )
+            st.session_state.ultimo_analisis_ia = reg.get("analisis_ia", "")
+            st.session_state.ultima_pregunta_ia = reg.get("pregunta_ia", "")
+            return True
     except Exception:
         pass
+    return False
 
 
 # =============================================================================
@@ -104,14 +168,6 @@ _PATRON_PARAFISCAL_IMPUESTO = re.compile(
 
 
 def clasificar_naturaleza_contable(desc_mayor: str, desc_banco: str, monto_mayor: float, monto_banco: float, marca: str) -> str:
-    """
-    Distingue con precisión la naturaleza del movimiento para separar:
-    - Transferencias entre Cuentas Propias (Fondeos entre bancos de la empresa)
-    - Ingresos por Ventas / Cobranzas de Clientes
-    - Ingresos Bancarios (Intereses)
-    - Ingresos por Devoluciones / Reintegros de Proveedores
-    - Categorías clave de Egresos
-    """
     if marca == "Asiento Anulado":
         return "Asiento Anulado (Neutralizado)"
 
@@ -142,11 +198,6 @@ def clasificar_naturaleza_contable(desc_mayor: str, desc_banco: str, monto_mayor
 
 
 def construir_dataframe_consolidado(res, tabla_t) -> pd.DataFrame:
-    """
-    Construye el DataFrame consolidado completo e incorpora:
-    - Naturaleza Contable (Cuentas Propias vs Ventas Clientes vs Bancarios vs Proveedores)
-    - % sobre Total Ingresos Mayor y % sobre Total Egresos Mayor para cada partida.
-    """
     filas_excel = []
 
     # 1. Pares cerrados (Conciliados)
@@ -177,11 +228,11 @@ def construir_dataframe_consolidado(res, tabla_t) -> pd.DataFrame:
             marca = f"Conciliado ({par.regla})"
 
             filas_excel.append({
-                "Banco - Fecha": mb.fecha if mb else "",
+                "Banco - Fecha": str(mb.fecha) if mb else "",
                 "Banco - Descripción": d_bco,
                 "Banco - Referencia": mb.referencia if mb else "",
                 "Banco - Monto": m_bco,
-                "Mayor - Fecha": ml.fecha if ml else "",
+                "Mayor - Fecha": str(ml.fecha) if ml else "",
                 "Mayor - Descripción": d_may,
                 "Mayor - Referencia": ml.referencia if ml else "",
                 "Mayor - Monto": m_may,
@@ -189,6 +240,7 @@ def construir_dataframe_consolidado(res, tabla_t) -> pd.DataFrame:
                 "Naturaleza Contable": clasificar_naturaleza_contable(d_may, d_bco, m_may, m_bco, marca),
                 "Tasa BCV USD": tasa_usd_val,
                 "Monto Convertido USD": monto_usd,
+                "Observaciones / Ajustes": "",
             })
 
     # 2. Partidas pendientes del Banco
@@ -205,7 +257,7 @@ def construir_dataframe_consolidado(res, tabla_t) -> pd.DataFrame:
         m_bco = float(mb.monto)
         marca = "Por conciliar (Banco)"
         filas_excel.append({
-            "Banco - Fecha": mb.fecha,
+            "Banco - Fecha": str(mb.fecha),
             "Banco - Descripción": mb.descripcion,
             "Banco - Referencia": mb.referencia,
             "Banco - Monto": m_bco,
@@ -217,6 +269,7 @@ def construir_dataframe_consolidado(res, tabla_t) -> pd.DataFrame:
             "Naturaleza Contable": clasificar_naturaleza_contable("", mb.descripcion, 0.0, m_bco, marca),
             "Tasa BCV USD": tasa_usd_val,
             "Monto Convertido USD": monto_usd,
+            "Observaciones / Ajustes": "",
         })
 
     # 3. Partidas pendientes de Libros
@@ -237,7 +290,7 @@ def construir_dataframe_consolidado(res, tabla_t) -> pd.DataFrame:
             "Banco - Descripción": "",
             "Banco - Referencia": "",
             "Banco - Monto": 0.0,
-            "Mayor - Fecha": ml.fecha,
+            "Mayor - Fecha": str(ml.fecha),
             "Mayor - Descripción": ml.descripcion,
             "Mayor - Referencia": ml.referencia,
             "Mayor - Monto": m_may,
@@ -245,6 +298,7 @@ def construir_dataframe_consolidado(res, tabla_t) -> pd.DataFrame:
             "Naturaleza Contable": clasificar_naturaleza_contable(ml.descripcion, "", m_may, 0.0, marca),
             "Tasa BCV USD": tasa_usd_val,
             "Monto Convertido USD": monto_usd,
+            "Observaciones / Ajustes": "",
         })
 
     # 4. Asientos Anulados detectados en Libros
@@ -264,7 +318,7 @@ def construir_dataframe_consolidado(res, tabla_t) -> pd.DataFrame:
             "Banco - Descripción": "",
             "Banco - Referencia": "",
             "Banco - Monto": 0.0,
-            "Mayor - Fecha": ml.fecha,
+            "Mayor - Fecha": str(ml.fecha),
             "Mayor - Descripción": ml.descripcion,
             "Mayor - Referencia": ml.referencia,
             "Mayor - Monto": m_may,
@@ -272,25 +326,36 @@ def construir_dataframe_consolidado(res, tabla_t) -> pd.DataFrame:
             "Naturaleza Contable": "Asiento Anulado (Neutralizado)",
             "Tasa BCV USD": tasa_usd_val,
             "Monto Convertido USD": monto_usd,
+            "Observaciones / Ajustes": "",
         })
 
     df = pd.DataFrame(filas_excel)
     if df.empty:
         return df
 
-    # Calcular totales activos de Mayor (excluyendo asientos anulados) para los pesos porcentuales
-    mask_activo = df["Marca Conciliación"] != "Asiento Anulado"
-    total_ingresos_mayor = df.loc[mask_activo & (df["Mayor - Monto"] > 0), "Mayor - Monto"].sum()
-    total_egresos_mayor = df.loc[mask_activo & (df["Mayor - Monto"] < 0), "Mayor - Monto"].abs().sum()
+    return recalcular_porcentajes_consolidado(df)
+
+
+def recalcular_porcentajes_consolidado(df: pd.DataFrame) -> pd.DataFrame:
+    """Recalcula los porcentajes sobre Total Ingresos y Total Egresos en el DataFrame consolidado."""
+    if df.empty:
+        return df
+    df = df.copy()
+    mask_activo = ~df["Marca Conciliación"].isin(["Asiento Anulado", "TOTAL INGRESOS", "TOTAL EGRESOS", "FLUJO NETO"])
+    total_ingresos_mayor = pd.to_numeric(df.loc[mask_activo & (pd.to_numeric(df["Mayor - Monto"], errors="coerce") > 0), "Mayor - Monto"], errors="coerce").sum()
+    total_egresos_mayor = pd.to_numeric(df.loc[mask_activo & (pd.to_numeric(df["Mayor - Monto"], errors="coerce") < 0), "Mayor - Monto"], errors="coerce").abs().sum()
 
     pct_ing_list = []
     pct_egr_list = []
     for _, row in df.iterrows():
-        if row["Marca Conciliación"] == "Asiento Anulado":
+        if row["Marca Conciliación"] in ("Asiento Anulado", "TOTAL INGRESOS", "TOTAL EGRESOS", "FLUJO NETO"):
             pct_ing_list.append(0.0)
             pct_egr_list.append(0.0)
             continue
-        val_m = float(row["Mayor - Monto"])
+        try:
+            val_m = float(row["Mayor - Monto"])
+        except Exception:
+            val_m = 0.0
         if val_m > 0 and total_ingresos_mayor > 0:
             pct_ing_list.append(round((val_m / total_ingresos_mayor) * 100.0, 2))
             pct_egr_list.append(0.0)
@@ -307,20 +372,16 @@ def construir_dataframe_consolidado(res, tabla_t) -> pd.DataFrame:
 
 
 def generar_tablas_distribucion(df_rep: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """
-    Genera 3 DataFrames analíticos para exportar en pestañas de Excel:
-    1) Resumen Ejecutivo de Totales (Ingresos por Ventas vs Transferencias Cuentas Propias vs Egresos)
-    2) Top y Distribución Porcentual de Egresos por 'Mayor - Descripción'
-    3) Top y Distribución Porcentual de Ingresos por 'Mayor - Descripción' (con peso sobre Total y sobre Ventas Clientes)
-    """
     if df_rep.empty:
         vacio = pd.DataFrame()
         return vacio, vacio, vacio
 
     df_act = df_rep[
         (df_rep["Mayor - Descripción"].astype(str).str.strip() != "")
-        & (df_rep["Marca Conciliación"] != "Asiento Anulado")
+        & (~df_rep["Marca Conciliación"].isin(["Asiento Anulado", "TOTAL INGRESOS", "TOTAL EGRESOS", "FLUJO NETO"]))
     ].copy()
+    df_act["Mayor - Monto"] = pd.to_numeric(df_act["Mayor - Monto"], errors="coerce").fillna(0.0)
+    df_act["Monto Convertido USD"] = pd.to_numeric(df_act["Monto Convertido USD"], errors="coerce").fillna(0.0)
 
     # 1. Tabla de Egresos Agrupada
     egresos = df_act[df_act["Mayor - Monto"] < 0].copy()
@@ -342,7 +403,6 @@ def generar_tablas_distribucion(df_rep: pd.DataFrame) -> tuple[pd.DataFrame, pd.
         df_dist_egresos["% sobre Total Egresos"] = (
             (df_dist_egresos["Monto_Total_VES"] / tot_eg_ves * 100.0).round(2) if tot_eg_ves > 0 else 0.0
         )
-        # Fila de Total
         fila_tot_eg = pd.DataFrame([{
             "Mayor - Descripción": "TOTAL EGRESOS MAYOR (SIN ANULADOS)",
             "Naturaleza Contable": "TOTAL",
@@ -355,7 +415,7 @@ def generar_tablas_distribucion(df_rep: pd.DataFrame) -> tuple[pd.DataFrame, pd.
     else:
         df_dist_egresos = pd.DataFrame()
 
-    # 2. Tabla de Ingresos Agrupada (separando Transferencias Propias de Ventas Clientes)
+    # 2. Tabla de Ingresos Agrupada
     ingresos = df_act[df_act["Mayor - Monto"] > 0].copy()
     if not ingresos.empty:
         ingresos["Monto_VES"] = ingresos["Mayor - Monto"]
@@ -415,15 +475,105 @@ def generar_tablas_distribucion(df_rep: pd.DataFrame) -> tuple[pd.DataFrame, pd.
     return df_res_nat, df_dist_egresos, df_dist_ingresos
 
 
+def empaquetar_excel_consolidado(df_base: pd.DataFrame, pregunta_ia: str = "", respuesta_ia: str = "") -> bytes:
+    """Genera el archivo Excel multi-hoja completo a partir de un DataFrame consolidado."""
+    df_rep = recalcular_porcentajes_consolidado(df_base)
+    df_res_nat, df_dist_egresos, df_dist_ingresos = generar_tablas_distribucion(df_rep)
+
+    df_hoja_principal = df_rep.copy()
+    if not df_hoja_principal.empty:
+        mask_no_anul = ~df_hoja_principal["Marca Conciliación"].isin(
+            ["Asiento Anulado", "TOTAL INGRESOS", "TOTAL EGRESOS", "FLUJO NETO"]
+        )
+        df_sin_tot = df_hoja_principal[
+            ~df_hoja_principal["Marca Conciliación"].isin(["TOTAL INGRESOS", "TOTAL EGRESOS", "FLUJO NETO"])
+        ].copy()
+        montos_m = pd.to_numeric(df_sin_tot["Mayor - Monto"], errors="coerce").fillna(0.0)
+        tot_ing_m = montos_m[mask_no_anul & (montos_m > 0)].sum()
+        tot_egr_m = montos_m[mask_no_anul & (montos_m < 0)].sum()
+        tot_net_m = tot_ing_m + tot_egr_m
+        tot_bco_m = pd.to_numeric(df_sin_tot["Banco - Monto"], errors="coerce").fillna(0.0).sum()
+        tot_usd_m = pd.to_numeric(df_sin_tot.loc[mask_no_anul, "Monto Convertido USD"], errors="coerce").fillna(0.0).sum()
+
+        filas_totales = pd.DataFrame([
+            {
+                "Banco - Fecha": "",
+                "Banco - Descripción": "TOTAL INGRESOS MAYOR (SIN ANULADOS)",
+                "Banco - Referencia": "",
+                "Banco - Monto": 0.0,
+                "Mayor - Fecha": "",
+                "Mayor - Descripción": "TOTAL INGRESOS MAYOR",
+                "Mayor - Referencia": "",
+                "Mayor - Monto": round(tot_ing_m, 2),
+                "Marca Conciliación": "TOTAL INGRESOS",
+                "Naturaleza Contable": "Total Entradas Mayor",
+                "Tasa BCV USD": 0.0,
+                "Monto Convertido USD": 0.0,
+                "Observaciones / Ajustes": "",
+                "% s/ Total Ingresos Mayor": 100.0 if tot_ing_m > 0 else 0.0,
+                "% s/ Total Egresos Mayor": 0.0,
+            },
+            {
+                "Banco - Fecha": "",
+                "Banco - Descripción": "TOTAL EGRESOS MAYOR (SIN ANULADOS)",
+                "Banco - Referencia": "",
+                "Banco - Monto": 0.0,
+                "Mayor - Fecha": "",
+                "Mayor - Descripción": "TOTAL EGRESOS MAYOR",
+                "Mayor - Referencia": "",
+                "Mayor - Monto": round(tot_egr_m, 2),
+                "Marca Conciliación": "TOTAL EGRESOS",
+                "Naturaleza Contable": "Total Salidas Mayor",
+                "Tasa BCV USD": 0.0,
+                "Monto Convertido USD": 0.0,
+                "Observaciones / Ajustes": "",
+                "% s/ Total Ingresos Mayor": 0.0,
+                "% s/ Total Egresos Mayor": 100.0 if tot_egr_m < 0 else 0.0,
+            },
+            {
+                "Banco - Fecha": "",
+                "Banco - Descripción": "FLUJO NETO / SALDO MAYOR (INGRESOS - EGRESOS)",
+                "Banco - Referencia": "",
+                "Banco - Monto": round(tot_bco_m, 2),
+                "Mayor - Fecha": "",
+                "Mayor - Descripción": "FLUJO NETO MAYOR",
+                "Mayor - Referencia": "",
+                "Mayor - Monto": round(tot_net_m, 2),
+                "Marca Conciliación": "FLUJO NETO",
+                "Naturaleza Contable": "Resultado Neto Periodo",
+                "Tasa BCV USD": 0.0,
+                "Monto Convertido USD": round(tot_usd_m, 2),
+                "Observaciones / Ajustes": "",
+                "% s/ Total Ingresos Mayor": 0.0,
+                "% s/ Total Egresos Mayor": 0.0,
+            },
+        ])
+        df_hoja_principal = pd.concat([df_sin_tot, filas_totales], ignore_index=True)
+
+    output_excel = io.BytesIO()
+    with pd.ExcelWriter(output_excel, engine="openpyxl") as writer:
+        df_hoja_principal.to_excel(writer, index=False, sheet_name="Conciliacion_Consolidada")
+        if not df_res_nat.empty:
+            df_res_nat.to_excel(writer, index=False, sheet_name="Resumen_Naturaleza")
+        if not df_dist_ingresos.empty:
+            df_dist_ingresos.to_excel(writer, index=False, sheet_name="Top_Distribucion_Ingresos")
+        if not df_dist_egresos.empty:
+            df_dist_egresos.to_excel(writer, index=False, sheet_name="Top_Distribucion_Egresos")
+        if respuesta_ia:
+            df_ia_hoja = pd.DataFrame([
+                {
+                    "Consulta Realizada": pregunta_ia,
+                    "Análisis del Asistente IA": respuesta_ia,
+                }
+            ])
+            df_ia_hoja.to_excel(writer, index=False, sheet_name="Analisis_IA")
+    return output_excel.getvalue()
+
+
 # =============================================================================
 # 3. EXPORTADOR NATIVO A WORD (.DOCX) CON SOPORTE DE TABLAS Y FORMATO EJECUTIVO
 # =============================================================================
 def generar_word_analisis_ia(pregunta: str, respuesta_md: str, df_res_nat: pd.DataFrame, df_eg: pd.DataFrame, df_in: pd.DataFrame) -> bytes:
-    """
-    Genera un documento Word (.docx) válido y profesional con el análisis de la IA
-    y las tablas numéricas de distribución porcentual de Ingresos y Egresos.
-    Funciona nativamente en cualquier servidor sin requerir librerías externas adicionales.
-    """
     parrafos_xml = []
 
     def _p_titulo(texto: str, nivel: int = 1) -> str:
@@ -457,7 +607,6 @@ def generar_word_analisis_ia(pregunta: str, respuesta_md: str, df_res_nat: pd.Da
             '</w:tblBorders>'
         )
         xml_t = [f'<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/>{bord}</w:tblPr>']
-        # Encabezado
         xml_t.append("<w:tr>")
         for h in encabezados:
             h_esc = xml_escape(str(h))
@@ -467,7 +616,6 @@ def generar_word_analisis_ia(pregunta: str, respuesta_md: str, df_res_nat: pd.Da
                 f'<w:t>{h_esc}</w:t></w:r></w:p></w:tc>'
             )
         xml_t.append("</w:tr>")
-        # Filas
         for idx_f, fila in enumerate(filas):
             fill_c = "F8FAFC" if idx_f % 2 == 1 else "FFFFFF"
             xml_t.append("<w:tr>")
@@ -482,13 +630,11 @@ def generar_word_analisis_ia(pregunta: str, respuesta_md: str, df_res_nat: pd.Da
         xml_t.append("</w:tbl>")
         return "".join(xml_t)
 
-    # Encabezado del documento
-    parrafos_xml.append(_p_titulo("Informe Ejecutivo de Conciliación y Tesorería (IA)", 1))
+    parrafos_xml.append(_p_titulo("Tesora Pro — Informe Ejecutivo de Conciliación y Tesorería (IA)", 1))
     parrafos_xml.append(_p_texto(f"Fecha de emisión: {datetime.now().strftime('%Y-%m-%d %H:%M')}", negrita=True))
     if pregunta:
         parrafos_xml.append(_p_texto(f"Consulta analizada: {pregunta}", negrita=True))
 
-    # Parsear el Markdown del asistente (incluyendo tablas Markdown si las hubiera)
     lineas_md = (respuesta_md or "").splitlines()
     buffer_tabla = []
 
@@ -499,7 +645,6 @@ def generar_word_analisis_ia(pregunta: str, respuesta_md: str, df_res_nat: pd.Da
         filas_limpias = []
         for l_tab in buffer_tabla:
             partes = [c.strip() for c in l_tab.strip().strip("|").split("|")]
-            # Ignorar fila separadora de markdown (---|---|---)
             if all(set(p) <= set("-: ") for p in partes if p):
                 continue
             filas_limpias.append(partes)
@@ -529,7 +674,6 @@ def generar_word_analisis_ia(pregunta: str, respuesta_md: str, df_res_nat: pd.Da
 
     _vaciar_buffer_tabla()
 
-    # Añadir tablas numéricas estructuradas al final del Word
     if not df_res_nat.empty:
         parrafos_xml.append(_p_titulo("Resumen por Naturaleza Contable (Cuentas Propias vs Operativo)", 2))
         filas_nat = [
@@ -612,14 +756,6 @@ def generar_word_analisis_ia(pregunta: str, respuesta_md: str, df_res_nat: pd.Da
 
 
 def construir_contexto_ia_real(df_rep: pd.DataFrame, res) -> str:
-    """
-    Construye un contexto detallado basado EXCLUSIVAMENTE en los datos reales
-    cargados por el usuario, separando explícitamente en los Ingresos:
-    1) Transferencias entre Cuentas Propias (Fondeos bancarios internos)
-    2) Ingresos por Ventas / Cobranzas a Clientes
-    3) Ingresos Bancarios (Intereses)
-    4) Devoluciones / Reintegros
-    """
     if df_rep.empty:
         return "No hay movimientos en el reporte."
 
@@ -692,24 +828,217 @@ def construir_contexto_ia_real(df_rep: pd.DataFrame, res) -> str:
     return "\n".join(lineas)
 
 
-# Estilos CSS profesionales
+# Estilos CSS de Alto Contraste: Azul Oscuro (#0A1E46), Blanco (#FFFFFF) y Negro (#0B0F19) + Tipografía Ampliada
 st.markdown(
     """
     <style>
-        .stApp { background-color: #F4F6F9; }
-        .dashboard-card {
-            background-color: #FFFFFF;
-            padding: 20px;
-            border-radius: 10px;
-            border: 1px solid #E2E8F0;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-            margin-bottom: 15px;
+        /* Fondo general blanco/gris muy tenue y texto negro nítido */
+        .stApp {
+            background-color: #F8FAFC;
+            color: #0B0F19;
+            font-size: 16px;
         }
-        .stButton button { border-radius: 8px; font-weight: 500; }
+
+        /* Tipografía general incrementada y en negro profundo para máximo contraste */
+        p, li, label, .stMarkdown, .stText, span {
+            color: #0B0F19;
+            font-size: 16px !important;
+            line-height: 1.55;
+        }
+        h1 {
+            color: #0A1E46 !important;
+            font-size: 32px !important;
+            font-weight: 800 !important;
+            letter-spacing: -0.5px;
+        }
+        h2 {
+            color: #0A1E46 !important;
+            font-size: 25px !important;
+            font-weight: 700 !important;
+        }
+        h3 {
+            color: #0B0F19 !important;
+            font-size: 21px !important;
+            font-weight: 700 !important;
+        }
+        h4 {
+            color: #0A1E46 !important;
+            font-size: 18px !important;
+            font-weight: 700 !important;
+        }
+
+        /* Tarjetas blancas con borde definido y sombra elegante */
+        div[data-testid="stVerticalBlockBorderWrapper"] {
+            background-color: #FFFFFF;
+            border-radius: 12px;
+            border: 1.5px solid #CBD5E1;
+            box-shadow: 0 4px 12px rgba(10, 30, 70, 0.06);
+            padding: 16px;
+            margin-bottom: 12px;
+        }
+
+        /* Barra lateral (Sidebar) con contraste limpio y acentos en Azul Oscuro */
+        section[data-testid="stSidebar"] {
+            background-color: #FFFFFF;
+            border-right: 2px solid #E2E8F0;
+        }
+        section[data-testid="stSidebar"] .stRadio label {
+            font-size: 16px !important;
+            font-weight: 600 !important;
+            padding: 6px 10px;
+            border-radius: 8px;
+            color: #0B0F19 !important;
+        }
+
+        /* Botones principales y secundarios en Azul Oscuro y Negro */
+        .stButton button[kind="primary"] {
+            background-color: #0A1E46 !important;
+            color: #FFFFFF !important;
+            border: 1.5px solid #0A1E46 !important;
+            border-radius: 10px !important;
+            font-size: 16px !important;
+            font-weight: 700 !important;
+            padding: 0.55rem 1.2rem !important;
+            box-shadow: 0 2px 6px rgba(10, 30, 70, 0.25);
+        }
+        .stButton button[kind="primary"] * {
+            color: #FFFFFF !important;
+        }
+        .stButton button[kind="primary"]:hover {
+            background-color: #15357A !important;
+            border-color: #15357A !important;
+        }
+        .stButton button[kind="secondary"] {
+            background-color: #FFFFFF !important;
+            color: #0A1E46 !important;
+            border: 1.5px solid #0A1E46 !important;
+            border-radius: 10px !important;
+            font-size: 15px !important;
+            font-weight: 700 !important;
+            padding: 0.5rem 1rem !important;
+        }
+        .stButton button[kind="secondary"]:hover {
+            background-color: #EFF6FF !important;
+        }
+
+        /* Botones de descarga en Azul Oscuro */
+        .stDownloadButton button {
+            background-color: #0A1E46 !important;
+            color: #FFFFFF !important;
+            border-radius: 10px !important;
+            font-size: 15px !important;
+            font-weight: 700 !important;
+            border: none !important;
+        }
+        .stDownloadButton button * {
+            color: #FFFFFF !important;
+        }
+
+        /* Métricas (KPIs) con números grandes en Azul Oscuro y etiquetas en Negro */
+        div[data-testid="stMetricValue"] {
+            color: #0A1E46 !important;
+            font-size: 32px !important;
+            font-weight: 800 !important;
+        }
+        div[data-testid="stMetricLabel"] p {
+            color: #0B0F19 !important;
+            font-size: 15px !important;
+            font-weight: 700 !important;
+        }
+
+        /* Banner Superior Azul Oscuro Corporativo para cada vista */
+        .concialiapp-banner {
+            background: linear-gradient(135deg, #0A1E46 0%, #133375 100%);
+            color: #FFFFFF !important;
+            padding: 24px 28px;
+            border-radius: 14px;
+            margin-bottom: 22px;
+            box-shadow: 0 6px 18px rgba(10, 30, 70, 0.18);
+            border-left: 6px solid #38BDF8;
+        }
+        .concialiapp-banner h1 {
+            color: #FFFFFF !important;
+            font-size: 30px !important;
+            font-weight: 800 !important;
+            margin: 0 0 6px 0 !important;
+        }
+        .concialiapp-banner p {
+            color: #E2E8F0 !important;
+            font-size: 16px !important;
+            margin: 0 !important;
+            font-weight: 500 !important;
+        }
+
+        /* Sub-banner informativo en Azul Oscuro */
+        .concialiapp-subbanner {
+            background-color: #0F295E;
+            color: #FFFFFF !important;
+            padding: 16px 22px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            font-size: 16px !important;
+            font-weight: 600;
+        }
+        .concialiapp-subbanner * {
+            color: #FFFFFF !important;
+        }
+
+        /* Insignia Tesora Pro en la barra lateral */
+        .sidebar-brand {
+            background: linear-gradient(135deg, #0A1E46 0%, #15357A 100%);
+            padding: 18px 16px;
+            border-radius: 12px;
+            margin-bottom: 14px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            box-shadow: 0 4px 12px rgba(10, 30, 70, 0.2);
+        }
+        .sidebar-brand-icon {
+            background-color: #FFFFFF;
+            color: #0A1E46;
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 22px;
+            font-weight: 900;
+        }
+        .sidebar-brand-title {
+            color: #FFFFFF !important;
+            font-size: 24px !important;
+            font-weight: 800 !important;
+            margin: 0 !important;
+            letter-spacing: -0.3px;
+        }
+        .sidebar-section-label {
+            font-size: 12px !important;
+            color: #0A1E46 !important;
+            font-weight: 800 !important;
+            letter-spacing: 0.8px;
+            text-transform: uppercase;
+            margin: 12px 0 6px 0 !important;
+        }
     </style>
 """,
     unsafe_allow_html=True,
 )
+
+
+def render_banner(titulo: str, subtitulo: str) -> None:
+    """Renderiza un banner institucional en Azul Oscuro con letras blancas de gran tamaño."""
+    st.markdown(
+        f"""
+        <div class="concialiapp-banner">
+            <h1>{titulo}</h1>
+            <p>{subtitulo}</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
 
 # =============================================================================
 # 4. GESTIÓN DE ESTADO Y SEGURIDAD (AUTENTICACIÓN)
@@ -718,7 +1047,7 @@ if "autenticado" not in st.session_state:
     st.session_state.autenticado = False
 
 if not st.session_state.autenticado:
-    st.title("🔒 Acceso al Sistema de Conciliación")
+    render_banner("🔒 Tesora Pro", "Sistema Corporativo de Conciliación Bancaria, Mayor Analítico y Tesorería")
     st.markdown("Por favor, ingrese su contraseña para continuar.")
 
     password_correcta = st.secrets.get("PASSWORD_ACCESO", "admin123")
@@ -756,17 +1085,35 @@ if "ultimo_analisis_ia" not in st.session_state:
 if "ultima_pregunta_ia" not in st.session_state:
     st.session_state.ultima_pregunta_ia = ""
 
+if "menu_proceso" not in st.session_state:
+    st.session_state.menu_proceso = "Dashboard"
+
+if "modulo_analisis" not in st.session_state:
+    st.session_state.modulo_analisis = "Resumen histórico"
+
+if "modulo_maestros" not in st.session_state:
+    st.session_state.modulo_maestros = "Ninguno"
+
 
 # =============================================================================
-# 5. BARRA LATERAL DE NAVEGACIÓN
+# 5. BARRA LATERAL DE NAVEGACIÓN SINCRONIZADA CON SESSION_STATE
 # =============================================================================
 with st.sidebar:
-    st.markdown("### 📊 Conciliacion")
-    st.caption("AI Reconciliation")
-    st.markdown("---")
+    st.markdown(
+        """
+        <div class="sidebar-brand">
+            <div class="sidebar-brand-icon">💎</div>
+            <div>
+                <div class="sidebar-brand-title">Tesora Pro</div>
+                <div style="color:#93C5FD; font-size:12px; font-weight:600; margin-top:2px;">Tesorería & Conciliación</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     st.markdown(
-        "<p style='font-size:11px; color:#64748B; font-weight:bold;margin-bottom:5px;'>PROCESO</p>",
+        "<p class='sidebar-section-label'>PROCESO</p>",
         unsafe_allow_html=True,
     )
     menu_proceso = st.radio(
@@ -779,25 +1126,30 @@ with st.sidebar:
             "Partidas pendientes",
             "Historial",
         ],
+        key="menu_proceso",
         label_visibility="collapsed",
     )
 
     st.markdown("---")
     st.markdown(
-        "<p style='font-size:11px; color:#64748B; font-weight:bold;margin-bottom:5px;'>ANÁLISIS & TASAS</p>",
+        "<p class='sidebar-section-label'>ANÁLISIS & TASAS</p>",
         unsafe_allow_html=True,
     )
     modulo_analisis = st.selectbox(
-        "Análisis", ["Resumen histórico", "Gestión de Tasas BCV / Multidivisa"]
+        "Análisis",
+        ["Resumen histórico", "Gestión de Tasas BCV / Multidivisa"],
+        key="modulo_analisis",
     )
 
     st.markdown("---")
     st.markdown(
-        "<p style='font-size:11px; color:#64748B; font-weight:bold;margin-bottom:5px;'>ARCHIVOS & MAESTROS</p>",
+        "<p class='sidebar-section-label'>ARCHIVOS & MAESTROS</p>",
         unsafe_allow_html=True,
     )
     modulo_maestros = st.selectbox(
-        "Maestros", ["Ninguno", "Bancos y Cuentas", "Estados de cuenta"]
+        "Maestros",
+        ["Ninguno", "Bancos y Cuentas", "Estados de cuenta"],
+        key="modulo_maestros",
     )
 
     st.markdown("---")
@@ -809,8 +1161,10 @@ with st.sidebar:
 # =============================================================================
 
 if modulo_analisis == "Gestión de Tasas BCV / Multidivisa":
-    st.title("💱 Tasas de Cambio BCV y Conversión Multidivisa")
-    st.markdown("Cargue masivamente las tasas oficiales desde Excel y realice conversiones seguras.")
+    render_banner(
+        "💱 Tasas de Cambio BCV y Conversión Multidivisa",
+        "Cargue masivamente las tasas oficiales desde Excel y realice conversiones multimoneda seguras en Tesora Pro.",
+    )
 
     archivo_tasas = st.file_uploader("Seleccione el archivo Excel de Tasas", type=["xlsx", "xls"])
     if archivo_tasas is not None:
@@ -843,111 +1197,243 @@ if modulo_analisis == "Gestión de Tasas BCV / Multidivisa":
             st.error(f"Error al leer el archivo de tasas: {ex}")
 
 elif modulo_maestros == "Bancos y Cuentas":
-    st.title("🏦 Maestros: Bancos y Cuentas")
-    st.markdown("Gestión de cuentas bancarias corporativas agrupadas por institución.")
-
-    with st.form("form_cuenta"):
-        banco_input = st.selectbox("Banco", ["Banco Nacional", "Banco Regional", "Banco Mercantil"])
-        nro_cta = st.text_input("Número de Cuenta")
-        moneda_cta = st.selectbox("Moneda", ["VES", "USD", "EUR"])
-        obs_cta = st.text_area("Observaciones (Sucursal, tipo, titular)")
-
-        if st.form_submit_button("Registrar Cuenta"):
-            if nro_cta.strip():
-                nro_limpio = "".join(filter(str.isalnum, nro_cta)).upper()
-                existentes = [
-                    "".join(filter(str.isalnum, c)).upper()
-                    for c in st.session_state.cuentas_bancarias.get(banco_input, [])
-                ]
-                if nro_limpio in existentes:
-                    st.error("⚠️ Ya existe una cuenta registrada con este número en el sistema.")
-                else:
-                    st.session_state.cuentas_bancarias.setdefault(banco_input, []).append(nro_cta)
-                    st.success(f"¡Cuenta {nro_cta} ({moneda_cta}) registrada con éxito para {banco_input}!")
-            else:
-                st.warning("Debe ingresar un número de cuenta válido.")
-
-    st.markdown("---")
-    st.subheader("Cuentas Activas")
-    for bnk, ctas in st.session_state.cuentas_bancarias.items():
-        st.write(f"**{bnk}**")
-        for c in ctas:
-            st.info(f"Número: {c}")
-
-elif menu_proceso == "Dashboard":
-    st.title("Dashboard")
-    st.markdown(
-        "<p style='color: #64748B; margin-top: -15px;'>Resumen general de conciliaciones bancarias</p>",
-        unsafe_allow_html=True,
+    render_banner(
+        "🏦 Bancos y Cuentas",
+        "Maestro de cuentas bancarias de la empresa. Registre sus cuentas para vincularlas al importar extractos.",
     )
-    st.success(
-        "🚀 **Sistema de Conciliación Inteligente Activo** — Bienvenido al "
-        "entorno de trabajo multimoneda. Utilice el menú lateral para iniciar "
-        "la importación o consultar las tasas.",
-        icon="💼",
+
+    col_f_cta, col_l_cta = st.columns([1.1, 1.5])
+    with col_f_cta:
+        with st.container(border=True):
+            st.markdown("#### ➕ Nueva Cuenta Bancaria")
+            with st.form("form_cuenta"):
+                banco_input = st.selectbox(
+                    "Institución Bancaria",
+                    ["Banesco", "BNC (Banco Nacional de Crédito)", "Banco Mercantil", "BBVA Provincial", "Banco de Venezuela", "Bancamiga", "Banco Nacional", "Banco Regional"],
+                )
+                nro_cta = st.text_input("Número de Cuenta (20 dígitos o código IBAN)")
+                moneda_cta = st.selectbox("Moneda de la Cuenta", ["VES", "USD", "EUR"])
+                obs_cta = st.text_input("Alias / Observaciones (Ej. Cuenta Principal Recaudadora)")
+
+                if st.form_submit_button("➕ Registrar Cuenta", use_container_width=True):
+                    if nro_cta.strip():
+                        nro_limpio = "".join(filter(str.isalnum, nro_cta)).upper()
+                        existentes = [
+                            "".join(filter(str.isalnum, c)).upper()
+                            for c in st.session_state.cuentas_bancarias.get(banco_input, [])
+                        ]
+                        if nro_limpio in existentes:
+                            st.error("⚠️ Ya existe una cuenta registrada con este número en el sistema.")
+                        else:
+                            etiqueta_cta = f"{nro_cta.strip()} ({moneda_cta})" + (f" — {obs_cta.strip()}" if obs_cta.strip() else "")
+                            st.session_state.cuentas_bancarias.setdefault(banco_input, []).append(etiqueta_cta)
+                            st.success(f"¡Cuenta registrada con éxito en {banco_input}!")
+                            st.rerun()
+                    else:
+                        st.warning("Debe ingresar un número de cuenta válido.")
+
+    with col_l_cta:
+        with st.container(border=True):
+            st.markdown("#### 🔍 Cuentas Registradas")
+            filtro_cta = st.text_input("🔎 Buscar por banco, número de cuenta o moneda...", placeholder="Ej: Banesco, 0134, VES...")
+            total_mostradas = 0
+            for bnk, ctas in st.session_state.cuentas_bancarias.items():
+                ctas_filtradas = [
+                    c for c in ctas
+                    if not filtro_cta.strip()
+                    or filtro_cta.lower() in bnk.lower()
+                    or filtro_cta.lower() in c.lower()
+                ]
+                if ctas_filtradas:
+                    st.markdown(f"**🏛️ {bnk}**")
+                    for c in ctas_filtradas:
+                        total_mostradas += 1
+                        st.markdown(
+                            f"<div style='background:#F1F5F9; border-left:4px solid #0A1E46; padding:10px 14px; border-radius:8px; margin-bottom:8px; font-weight:600;'>"
+                            f"💳 {c}</div>",
+                            unsafe_allow_html=True,
+                        )
+            if total_mostradas == 0:
+                st.info("No se encontraron cuentas que coincidan con la búsqueda.")
+
+# --- VISTA: DASHBOARD PRINCIPAL CON ACCIONES RÁPIDAS Y LINKS ACCIONABLES ---
+elif menu_proceso == "Dashboard":
+    render_banner(
+        "📊 Tesora Pro — Panel de Control Ejecutivo",
+        "Resumen general de conciliaciones bancarias, partidas abiertas, asientos anulados e historial corporativo.",
     )
     res = st.session_state.resultado_conciliacion
-    c1, c2, c3, c4 = st.columns(4)
+    historial_actual = cargar_historial_disco()
 
+    c1, c2, c3, c4 = st.columns(4)
     with c1:
-        st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
-        st.metric(
-            label="Partidas abiertas",
-            value=len(res.banco_pendiente) if res else len(st.session_state.movs_banco),
-        )
-        st.markdown("</div>", unsafe_allow_html=True)
+        with st.container(border=True):
+            st.metric(
+                label="Partidas abiertas (Banco + Libros)",
+                value=(len(res.banco_pendiente) + len(res.libros_pendiente))
+                if res
+                else (len(st.session_state.movs_banco) + len(st.session_state.movs_libros)),
+            )
     with c2:
-        st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
-        st.metric(label="Conciliaciones cerradas", value="1" if res else "0")
-        st.markdown("</div>", unsafe_allow_html=True)
+        with st.container(border=True):
+            st.metric(
+                label="Conciliaciones guardadas",
+                value=str(len(historial_actual)),
+            )
     with c3:
-        st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
-        st.metric(
-            label="Movimientos conciliados",
-            value=len(res.pares) if res else 0,
-        )
-        st.markdown("</div>", unsafe_allow_html=True)
+        with st.container(border=True):
+            st.metric(
+                label="Movimientos conciliados (Sesión)",
+                value=len(res.pares) if res else 0,
+            )
     with c4:
-        st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
-        st.metric(label="Diferencias registradas", value="0")
-        st.markdown("</div>", unsafe_allow_html=True)
+        with st.container(border=True):
+            st.metric(
+                label="Asientos anulados aislados",
+                value=len(getattr(res, "libros_anulados", [])) if res else 0,
+            )
 
     col_izq, col_der = st.columns([2, 1])
     with col_izq:
         st.markdown("### Conciliaciones recientes")
-        with st.container():
-            st.markdown(
-                '<div class="dashboard-card" style="text-align: center; padding: 30px;">',
-                unsafe_allow_html=True,
-            )
-            if not res:
-                st.markdown(
-                    "📄<br>**No hay conciliaciones cerradas**<br><span style='color: #64748B; font-size: 14px;'>Importá un extracto y realizá tu primera conciliación.</span>",
-                    unsafe_allow_html=True,
+        with st.container(border=True):
+            if res:
+                st.success(
+                    f"✅ **Conciliación activa en memoria:** {len(res.pares)} pares conciliados | "
+                    f"{len(res.banco_pendiente)} pend. banco | {len(res.libros_pendiente)} pend. libros | "
+                    f"{len(getattr(res, 'libros_anulados', []))} anulados."
                 )
-            else:
-                st.success("✅ Conciliación procesada correctamente. Revise el detalle en el menú **Conciliación**.")
-            st.markdown("</div>", unsafe_allow_html=True)
+                b_ir1, b_ir2 = st.columns(2)
+                with b_ir1:
+                    st.button(
+                        "🔍 Ir al Detalle de la Conciliación Actual",
+                        on_click=ir_a_menu,
+                        args=("Conciliación",),
+                        type="primary",
+                        use_container_width=True,
+                    )
+                with b_ir2:
+                    st.button(
+                        "📌 Ver Partidas Pendientes y Anulados",
+                        on_click=ir_a_menu,
+                        args=("Partidas pendientes",),
+                        use_container_width=True,
+                    )
+
+            if historial_actual:
+                st.markdown("#### 🗂️ Últimos cierres guardados (acceso directo)")
+                for idx_h, reg_h in enumerate(historial_actual[:5]):
+                    etiqueta_h = reg_h.get("etiqueta", f"Conciliación #{len(historial_actual) - idx_h}")
+                    fecha_h = reg_h.get("fecha_cierre", "Sin fecha")
+                    c_info, c_btn1, c_btn2 = st.columns([3, 1.3, 1.3])
+                    with c_info:
+                        st.markdown(
+                            f"**{etiqueta_h}** ({fecha_h})  \n"
+                            f"<span style='color:#64748B; font-size:13px;'>"
+                            f"Conciliados: {reg_h.get('pares_cerrados', 0)} • "
+                            f"Pend. Banco: {reg_h.get('banco_pendiente', 0)} • "
+                            f"Pend. Libros: {reg_h.get('libros_pendiente', 0)} • "
+                            f"Anulados: {reg_h.get('libros_anulados', 0)}</span>",
+                            unsafe_allow_html=True,
+                        )
+                    with c_btn1:
+                        if st.button(
+                            "🔄 Retomar / Editar",
+                            key=f"dash_retomar_{idx_h}",
+                            use_container_width=True,
+                        ):
+                            if retomar_conciliacion_historica(reg_h):
+                                st.session_state.menu_proceso = "Conciliación"
+                                st.rerun()
+                            else:
+                                st.session_state.historial_seleccionado_idx = idx_h
+                                st.session_state.menu_proceso = "Historial"
+                                st.rerun()
+                    with c_btn2:
+                        if st.button(
+                            "📜 Ver Consolidado",
+                            key=f"dash_ver_hist_{idx_h}",
+                            use_container_width=True,
+                        ):
+                            st.session_state.historial_seleccionado_idx = idx_h
+                            st.session_state.menu_proceso = "Historial"
+                            st.rerun()
+                    st.markdown("<hr style='margin:6px 0; border-color:#F1F5F9;'>", unsafe_allow_html=True)
+            elif not res:
+                st.info(
+                    "📄 **No hay conciliaciones recientes.** Utilice los botones de **Acciones rápidas** a la derecha para importar sus archivos e iniciar su primera conciliación."
+                )
 
     with col_der:
         st.markdown("### Acciones rápidas")
-        with st.container():
-            st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
-            if st.button("📂 Importar extracto o mayor", use_container_width=True):
-                pass
-            if st.button("⚡ Iniciar conciliación", use_container_width=True):
-                pass
-            st.markdown("</div>", unsafe_allow_html=True)
+        with st.container(border=True):
+            st.button(
+                "📂 Importar extracto o mayor",
+                on_click=ir_a_menu,
+                args=("Importar",),
+                use_container_width=True,
+                type="primary",
+            )
+            st.button(
+                "⚡ Ir al Motor de Conciliación",
+                on_click=ir_a_menu,
+                args=("Conciliación",),
+                use_container_width=True,
+            )
+            st.button(
+                "📌 Revisar Partidas Pendientes",
+                on_click=ir_a_menu,
+                args=("Partidas pendientes",),
+                use_container_width=True,
+            )
+            st.button(
+                "📜 Abrir Historial y Consolidados",
+                on_click=ir_a_menu,
+                args=("Historial",),
+                use_container_width=True,
+            )
+            st.button(
+                "💱 Cargar Tasas BCV / Multidivisa",
+                on_click=lambda: st.session_state.update({"modulo_analisis": "Gestión de Tasas BCV / Multidivisa"}),
+                use_container_width=True,
+            )
 
 elif menu_proceso == "Importar":
-    st.title("📂 Importar Extractos y Registros Contables")
-    st.markdown("Cargue archivos en formato Excel o CSV para procesar los movimientos automáticamente.")
-
-    tipo_origen = st.selectbox(
-        "Seleccione el tipo de archivo",
-        ["Extracto Bancario", "Registro Contable (Mayor)"],
+    render_banner(
+        "📂 Importar Estado de Cuenta o Mayor Contable",
+        "Suba el extracto bancario o el registro contable (Mayor), asocie la cuenta bancaria y parametrice sus columnas.",
     )
-    archivo_subido = st.file_uploader("Seleccione el archivo", type=["xlsx", "xls", "csv"])
+
+    with st.container(border=True):
+        st.markdown("#### 1. Tipo de archivo y Cuenta Asociada")
+        col_t1, col_t2, col_t3 = st.columns(3)
+        with col_t1:
+            tipo_origen = st.selectbox(
+                "Tipo de documento a importar",
+                ["Extracto Bancario (Movimientos del banco)", "Registro Contable (Mayor / Libro contable)"],
+            )
+        with col_t2:
+            bancos_disp = list(st.session_state.cuentas_bancarias.keys())
+            banco_sel_imp = st.selectbox("Banco asociado", bancos_disp if bancos_disp else ["Banesco"])
+        with col_t3:
+            ctas_disp = st.session_state.cuentas_bancarias.get(banco_sel_imp, ["Cuenta Principal"])
+            cta_sel_imp = st.selectbox("Cuenta bancaria", ctas_disp if ctas_disp else ["Cuenta Principal"])
+
+    with st.container(border=True):
+        st.markdown("#### 2. Período y Saldos de Control (Opcional)")
+        cp1, cp2, cp3, cp4 = st.columns(4)
+        with cp1:
+            st.date_input("Período desde", value=None, key="imp_fecha_desde")
+        with cp2:
+            st.date_input("Período hasta", value=None, key="imp_fecha_hasta")
+        with cp3:
+            st.number_input("Saldo inicial (VES)", value=0.0, step=100.0, format="%.2f", key="imp_saldo_ini")
+        with cp4:
+            st.number_input("Saldo final (VES)", value=0.0, step=100.0, format="%.2f", key="imp_saldo_fin")
+
+    with st.container(border=True):
+        st.markdown("#### 3. Seleccione el archivo (Excel o CSV)")
+        archivo_subido = st.file_uploader("Arrastre el archivo aquí o haga clic para seleccionar", type=["xlsx", "xls", "csv"])
 
     if archivo_subido is not None:
         try:
@@ -980,7 +1466,7 @@ elif menu_proceso == "Importar":
                 mapeo["entrada"] = st.selectbox("Columna Entrada (Crédito / Debe)", cols_disponibles)
                 mapeo["salida"] = st.selectbox("Columna Salida (Débito / Haber)", cols_disponibles)
 
-            if st.button("Procesar e Importar al Sistema"):
+            if st.button("Procesar e Importar al Sistema", type="primary"):
                 origen_val = "banco" if "Extracto" in tipo_origen else "libros"
                 resultado_carga = cargar_movimientos(
                     df_imp.to_dict(orient="records"), origen_val, mapeo
@@ -1001,31 +1487,97 @@ elif menu_proceso == "Importar":
             st.error(f"Error al procesar el archivo cargado: {err}")
 
 elif menu_proceso == "Reglas":
-    st.title("📋 Configuración y Criterios del Motor de Conciliación")
-    st.markdown("Detalle automatizado de las reglas contables y de cruce aplicadas por el sistema en Venezuela.")
+    render_banner(
+        "🏷️ Reglas de Conciliación y Etiquetas (Tags)",
+        "Defina reglas paramétricas automáticas, consulte los algoritmos activos del motor y cree etiquetas personalizadas para auditoría.",
+    )
 
-    st.markdown("""
-    ### 1. Aislamiento Previo de Asientos Anulados en Libros (Anti-Falsos Positivos)
-    * **Condición:** Antes de cruzar nada con el banco, el motor escanea el mayor contable buscando parejas de movimientos con montos exactos de signo opuesto ($+X$ y $-X$) que compartan la misma referencia (`Nº documento`) y descripción/contrapartida.
-    * **Propósito:** Neutralizar las anulaciones internas desde la raíz para que **nunca consuman movimientos bancarios reales** ni inflen los pendientes. Quedan etiquetadas como **`Asiento Anulado`**.
+    if "reglas_personalizadas" not in st.session_state:
+        st.session_state.reglas_personalizadas = [
+            {"nombre": "Aislamiento de Asientos Anulados (Debe = Haber)", "patron_banco": "N/A (Interno Libros)", "patron_contable": "Mismo Nº Doc + Misma Contrapartida + Signo Opuesto", "activa": True},
+            {"nombre": "Transferencias entre Cuentas Propias (Fondeos)", "patron_banco": "TRANSFERENCIA / FONDEO", "patron_contable": "BANCO BANESCO / BNC / MERCANTIL", "activa": True},
+        ]
+    if "tags_personalizados" not in st.session_state:
+        st.session_state.tags_personalizados = [
+            {"nombre": "Pendiente Auditoría", "color": "#0A1E46"},
+            {"nombre": "Comisión Bancaria", "color": "#1D4ED8"},
+            {"nombre": "Fondeo Cuentas Propias", "color": "#047857"},
+        ]
 
-    ### 2. Clasificación Automática de Naturaleza Contable (Cuentas Propias vs Operativo Real)
-    * **Transferencias entre Cuentas Propias (Fondeos):** Identifica traslados entre bancos de la empresa (`BANCO BANESCO`, `BNC`, `MERCANTIL`, etc.) para no confundirlos con ingresos por ventas.
-    * **Ingresos por Ventas / Cobranzas de Clientes:** Entradas provenientes de clientes y distribuidoras comerciales.
-    * **Ingresos Bancarios / Intereses y Devoluciones:** Distingue abonos por intereses bancarios y reintegros o devoluciones de proveedores por errores de pago.
+    with st.container(border=True):
+        st.markdown("#### ⚙️ Reglas del Motor y Reglas Paramétricas Activas")
+        st.markdown(
+            "* **Regla Previa Anti-Falsos Positivos (Asientos Anulados):** Aísla antes del cruce bancario los pares en libros con igual `Nº documento`, igual `Contrapartida` y montos opuestos ($+X$ y $-X$).\n"
+            "* **Regla C1 (Cruce Exacto):** Referencia + Monto idéntico + Fecha exacta.\n"
+            "* **Regla C2 (Ventana de Días):** Mismo monto y signo dentro de los días de tolerancia.\n"
+            "* **Reglas C3 / C4 (Sugerencias IA):** Aproximación de montos y agrupación de múltiples partidas."
+        )
+        df_reglas = pd.DataFrame(st.session_state.reglas_personalizadas)
+        st.dataframe(df_reglas, use_container_width=True)
 
-    ### 3. Cruce Exacto (Regla C1) y Tolerancia de Fechas (Regla C2)
-    * **C1:** Coincidencia exacta de referencia, monto idéntico y fecha.
-    * **C2:** Mismo monto y signo dentro de la ventana de días hábiles configurada.
-    """)
+    col_nr, col_nt = st.columns([1.3, 1])
+    with col_nr:
+        with st.container(border=True):
+            st.markdown("#### ➕ Nueva Regla Paramétrica")
+            nom_r = st.text_input("Nombre de la regla", placeholder="Ej: Liquidación Punto de Venta / TDD")
+            c_pb, c_pc = st.columns(2)
+            with c_pb:
+                pat_b = st.text_input("Patrón en Banco", placeholder="Ej: LIQUIDACION POS")
+            with c_pc:
+                pat_c = st.text_input("Patrón en Mayor Contable", placeholder="Ej: VENTAS POS")
+            if st.button("➕ Crear Regla", type="primary"):
+                if nom_r.strip():
+                    st.session_state.reglas_personalizadas.append({
+                        "nombre": nom_r.strip(),
+                        "patron_banco": pat_b.strip() or "Cualquiera",
+                        "patron_contable": pat_c.strip() or "Cualquiera",
+                        "activa": True,
+                    })
+                    st.success("¡Regla paramétrica agregada con éxito!")
+                    st.rerun()
+                else:
+                    st.warning("Ingrese un nombre para la regla.")
+
+    with col_nt:
+        with st.container(border=True):
+            st.markdown("#### 🏷️ Mis Tags de Conciliación")
+            tags_html = " ".join(
+                f"<span style='display:inline-block; background:{t['color']}; color:#FFFFFF; padding:6px 14px; border-radius:20px; font-weight:700; font-size:14px; margin:4px;'>{t['nombre']}</span>"
+                for t in st.session_state.tags_personalizados
+            )
+            st.markdown(tags_html, unsafe_allow_html=True)
+            st.markdown("---")
+            nom_t = st.text_input("Nombre del nuevo Tag", placeholder="Ej: Revisar con Proveedor")
+            col_t_sel = st.selectbox("Color del Tag", ["Azul Oscuro (#0A1E46)", "Azul Rey (#1D4ED8)", "Negro (#0B0F19)", "Verde (#047857)", "Ámbar (#B45309)", "Rojo (#B91C1C)"])
+            if st.button("➕ Crear Tag"):
+                if nom_t.strip():
+                    hex_c = col_t_sel.split("(")[-1].replace(")", "")
+                    st.session_state.tags_personalizados.append({"nombre": nom_t.strip(), "color": hex_c})
+                    st.rerun()
 
 elif menu_proceso == "Conciliación":
-    st.title("⚡ Motor de Cruce, Distribución Porcentual y Asistente IA")
-    st.markdown("Cruce inteligente con aislamiento de anulados, peso porcentual por partida y distinción de cuentas propias.")
-
-    st.info(
-        f"📊 Movimientos cargados en memoria — Banco: {len(st.session_state.movs_banco)} | Libros: {len(st.session_state.movs_libros)}"
+    render_banner(
+        "⚡ Conciliación Bancaria y Asistente IA",
+        "Cruce inteligente con aislamiento previo de asientos anulados, distribución porcentual (%) y distinción de cuentas propias.",
     )
+
+    with st.container(border=True):
+        st.markdown("#### 📂 Archivos a Conciliar en Memoria")
+        ca1, ca2 = st.columns(2)
+        with ca1:
+            n_bco = len(st.session_state.movs_banco)
+            if n_bco > 0:
+                st.success(f"🏛️ **EXTRACTO BANCARIO:** {n_bco} movimientos cargados y listos.")
+            else:
+                st.warning("🏛️ **EXTRACTO BANCARIO:** No hay extractos importados.")
+                st.button("📤 Importar Extracto", on_click=ir_a_menu, args=("Importar",), key="btn_imp_bco_c")
+        with ca2:
+            n_lib = len(st.session_state.movs_libros)
+            if n_lib > 0:
+                st.success(f"📖 **REGISTROS CONTABLES (MAYOR):** {n_lib} movimientos cargados y listos.")
+            else:
+                st.warning("📖 **REGISTROS CONTABLES (MAYOR):** No hay registros importados.")
+                st.button("📤 Importar Mayor", on_click=ir_a_menu, args=("Importar",), key="btn_imp_lib_c")
 
     tolerancia_c2 = st.slider("Tolerancia de días para regla C2", min_value=0, max_value=7, value=3)
 
@@ -1061,107 +1613,48 @@ elif menu_proceso == "Conciliación":
         kpi4.metric("Libros Pendiente", datos_resumen.get("libros_pendiente", 0))
         kpi5.metric("Asientos Anulados", datos_resumen.get("libros_anulados", 0))
 
-        if st.button("💾 Guardar Conciliación Actual en Historial"):
-            registro_historial = {
-                "fecha_cierre": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "pares_cerrados": datos_resumen.get("pares_cerrados", 0),
-                "banco_pendiente": datos_resumen.get("banco_pendiente", 0),
-                "libros_pendiente": datos_resumen.get("libros_pendiente", 0),
-                "libros_anulados": datos_resumen.get("libros_anulados", 0),
-            }
-            guardar_en_historial(registro_historial)
-            st.success("¡Conciliación guardada permanentemente en el Historial del sistema!")
+        # Guardado completo en Historial (con etiqueta identificadora, movimientos crudos y consolidado completo)
+        with st.container(border=True):
+            st.markdown("#### 💾 Guardar Conciliación Completa en el Historial (Para Retomar o Editar después)")
+            col_et, col_bt = st.columns([3, 1])
+            with col_et:
+                etiqueta_cierre = st.text_input(
+                    "Nombre o referencia de este cierre (Ej. Banesco Octubre 2026):",
+                    value=f"Conciliación {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+                )
+            with col_bt:
+                st.write("")
+                st.write("")
+                if st.button("💾 Guardar en Historial", type="primary", use_container_width=True):
+                    registro_historial = {
+                        "id_cierre": datetime.now().strftime("%Y%m%d%H%M%S"),
+                        "etiqueta": etiqueta_cierre.strip() or f"Conciliación {datetime.now().strftime('%Y-%m-%d')}",
+                        "fecha_cierre": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "tolerancia_c2": tolerancia_c2,
+                        "pares_cerrados": datos_resumen.get("pares_cerrados", 0),
+                        "banco_pendiente": datos_resumen.get("banco_pendiente", 0),
+                        "libros_pendiente": datos_resumen.get("libros_pendiente", 0),
+                        "libros_anulados": datos_resumen.get("libros_anulados", 0),
+                        "consolidado_rows": df_reporte_actual.to_dict(orient="records"),
+                        "movs_banco_raw": [serializar_movimiento(m) for m in st.session_state.movs_banco],
+                        "movs_libros_raw": [serializar_movimiento(m) for m in st.session_state.movs_libros],
+                        "pregunta_ia": st.session_state.ultima_pregunta_ia,
+                        "analisis_ia": st.session_state.ultimo_analisis_ia,
+                    }
+                    guardar_en_historial(registro_historial)
+                    st.success("🎉 ¡Conciliación completa guardada! Puede ver su consolidado o editarla cuando quiera en el menú 'Historial' o desde el 'Dashboard'.")
 
         # =====================================================================
         # EXPORTAR REPORTE CONSOLIDADO EN EXCEL (CON % POR PARTIDA Y PESTAÑAS TOP)
         # =====================================================================
         st.markdown("---")
         st.subheader("📥 Exportar Reporte Consolidado + Distribución Porcentual en Excel")
-        st.caption(
-            "Incluye en el mismo Excel: 1) Conciliación Consolidada con el % de cada partida sobre el Total de Ingresos y Egresos, "
-            "2) Resumen por Naturaleza Contable (Cuentas Propias vs Ventas), 3) Top Distribución Egresos y 4) Top Distribución Ingresos."
+
+        processed_data = empaquetar_excel_consolidado(
+            df_reporte_actual,
+            st.session_state.ultima_pregunta_ia,
+            st.session_state.ultimo_analisis_ia,
         )
-
-        # Agregar fila final de Totales a una copia de la hoja principal para el Excel
-        df_hoja_principal = df_reporte_actual.copy()
-        if not df_hoja_principal.empty:
-            mask_no_anul = df_hoja_principal["Marca Conciliación"] != "Asiento Anulado"
-            tot_ing_m = df_hoja_principal.loc[mask_no_anul & (df_hoja_principal["Mayor - Monto"] > 0), "Mayor - Monto"].sum()
-            tot_egr_m = df_hoja_principal.loc[mask_no_anul & (df_hoja_principal["Mayor - Monto"] < 0), "Mayor - Monto"].sum()
-            tot_net_m = tot_ing_m + tot_egr_m
-            tot_bco_m = df_hoja_principal["Banco - Monto"].sum()
-            tot_usd_m = df_hoja_principal.loc[mask_no_anul, "Monto Convertido USD"].sum()
-
-            filas_totales = pd.DataFrame([
-                {
-                    "Banco - Fecha": "",
-                    "Banco - Descripción": "TOTAL INGRESOS MAYOR (SIN ANULADOS)",
-                    "Banco - Referencia": "",
-                    "Banco - Monto": 0.0,
-                    "Mayor - Fecha": "",
-                    "Mayor - Descripción": "TOTAL INGRESOS MAYOR",
-                    "Mayor - Referencia": "",
-                    "Mayor - Monto": round(tot_ing_m, 2),
-                    "Marca Conciliación": "TOTAL INGRESOS",
-                    "Naturaleza Contable": "Total Entradas Mayor",
-                    "Tasa BCV USD": 0.0,
-                    "Monto Convertido USD": 0.0,
-                    "% s/ Total Ingresos Mayor": 100.0 if tot_ing_m > 0 else 0.0,
-                    "% s/ Total Egresos Mayor": 0.0,
-                },
-                {
-                    "Banco - Fecha": "",
-                    "Banco - Descripción": "TOTAL EGRESOS MAYOR (SIN ANULADOS)",
-                    "Banco - Referencia": "",
-                    "Banco - Monto": 0.0,
-                    "Mayor - Fecha": "",
-                    "Mayor - Descripción": "TOTAL EGRESOS MAYOR",
-                    "Mayor - Referencia": "",
-                    "Mayor - Monto": round(tot_egr_m, 2),
-                    "Marca Conciliación": "TOTAL EGRESOS",
-                    "Naturaleza Contable": "Total Salidas Mayor",
-                    "Tasa BCV USD": 0.0,
-                    "Monto Convertido USD": 0.0,
-                    "% s/ Total Ingresos Mayor": 0.0,
-                    "% s/ Total Egresos Mayor": 100.0 if tot_egr_m < 0 else 0.0,
-                },
-                {
-                    "Banco - Fecha": "",
-                    "Banco - Descripción": "FLUJO NETO / SALDO MAYOR (INGRESOS - EGRESOS)",
-                    "Banco - Referencia": "",
-                    "Banco - Monto": round(tot_bco_m, 2),
-                    "Mayor - Fecha": "",
-                    "Mayor - Descripción": "FLUJO NETO MAYOR",
-                    "Mayor - Referencia": "",
-                    "Mayor - Monto": round(tot_net_m, 2),
-                    "Marca Conciliación": "FLUJO NETO",
-                    "Naturaleza Contable": "Resultado Neto Periodo",
-                    "Tasa BCV USD": 0.0,
-                    "Monto Convertido USD": round(tot_usd_m, 2),
-                    "% s/ Total Ingresos Mayor": 0.0,
-                    "% s/ Total Egresos Mayor": 0.0,
-                },
-            ])
-            df_hoja_principal = pd.concat([df_hoja_principal, filas_totales], ignore_index=True)
-
-        output_excel = io.BytesIO()
-        with pd.ExcelWriter(output_excel, engine="openpyxl") as writer:
-            df_hoja_principal.to_excel(writer, index=False, sheet_name="Conciliacion_Consolidada")
-            if not df_res_nat.empty:
-                df_res_nat.to_excel(writer, index=False, sheet_name="Resumen_Naturaleza")
-            if not df_dist_ingresos.empty:
-                df_dist_ingresos.to_excel(writer, index=False, sheet_name="Top_Distribucion_Ingresos")
-            if not df_dist_egresos.empty:
-                df_dist_egresos.to_excel(writer, index=False, sheet_name="Top_Distribucion_Egresos")
-            if st.session_state.ultimo_analisis_ia:
-                df_ia_hoja = pd.DataFrame([
-                    {
-                        "Consulta Realizada": st.session_state.ultima_pregunta_ia,
-                        "Análisis del Asistente IA": st.session_state.ultimo_analisis_ia,
-                    }
-                ])
-                df_ia_hoja.to_excel(writer, index=False, sheet_name="Analisis_IA")
-        processed_data = output_excel.getvalue()
 
         st.download_button(
             label="📥 Descargar Reporte Consolidado + Distribución % en Excel (.xlsx)",
@@ -1170,7 +1663,6 @@ elif menu_proceso == "Conciliación":
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 
-        # Vista previa interactiva de las tablas de distribución porcentual
         with st.expander("📊 Ver Tablas de Distribución Porcentual (Ingresos vs Cuentas Propias y Egresos)", expanded=False):
             st.markdown("#### 1. Resumen por Naturaleza Contable")
             st.dataframe(df_res_nat, use_container_width=True)
@@ -1245,7 +1737,6 @@ elif menu_proceso == "Conciliación":
                 st.markdown("#### 📄 Resultado del Análisis IA")
                 st.markdown(st.session_state.ultimo_analisis_ia)
 
-                # Preparar archivo Word (.docx) nativo con formato ejecutivo y tablas
                 bytes_docx = generar_word_analisis_ia(
                     st.session_state.ultima_pregunta_ia,
                     st.session_state.ultimo_analisis_ia,
@@ -1254,7 +1745,6 @@ elif menu_proceso == "Conciliación":
                     df_dist_ingresos,
                 )
 
-                # Preparar archivo Excel (.xlsx) con el análisis y todas las tablas numéricas de distribución
                 out_ia_xlsx = io.BytesIO()
                 with pd.ExcelWriter(out_ia_xlsx, engine="openpyxl") as writer_ia:
                     if not df_res_nat.empty:
@@ -1317,58 +1807,190 @@ elif menu_proceso == "Conciliación":
                         st.rerun()
 
 elif menu_proceso == "Partidas pendientes":
-    st.title("📌 Partidas Abiertas, Pendientes y Asientos Anulados")
-    st.markdown("Gestión detallada de partidas sin resolver y asientos contables aislados por anulación.")
+    render_banner(
+        "📌 Partidas Conciliatorias Abiertas y Asientos Anulados",
+        "Partidas sin conciliar que requieren seguimiento contable y asientos anulados aislados automáticamente.",
+    )
     if st.session_state.resultado_conciliacion:
         res = st.session_state.resultado_conciliacion
-        col_pb, col_pl, col_pa = st.columns(3)
-        with col_pb:
-            st.subheader("Pendientes de Banco")
-            if res.banco_pendiente:
-                df_pb = pd.DataFrame([vars(m) for m in res.banco_pendiente])
-                st.dataframe(df_pb[["id", "fecha", "monto", "descripcion", "referencia"]])
-            else:
-                st.info("Sin partidas pendientes en banco.")
-        with col_pl:
-            st.subheader("Pendientes de Libros")
-            if res.libros_pendiente:
-                df_pl = pd.DataFrame([vars(m) for m in res.libros_pendiente])
-                st.dataframe(df_pl[["id", "fecha", "monto", "descripcion", "referencia"]])
-            else:
-                st.info("Sin partidas pendientes en libros.")
-        with col_pa:
-            st.subheader("Asientos Anulados")
-            if getattr(res, "libros_anulados", None):
-                lista_anulados = [
-                    {
-                        "id": m.id,
-                        "fecha": m.fecha,
-                        "monto": m.monto,
-                        "descripcion": m.descripcion,
-                        "referencia": m.referencia,
-                        "marca": marca,
-                    }
-                    for m, marca in res.libros_anulados
-                ]
-                df_pa = pd.DataFrame(lista_anulados)
-                st.dataframe(df_pa[["id", "fecha", "monto", "descripcion", "referencia", "marca"]])
-            else:
-                st.info("Sin asientos anulados detectados.")
-    else:
-        st.info("Ejecute una conciliación primero para visualizar las partidas.")
+        with st.container(border=True):
+            f_col1, f_col2 = st.columns([2, 1])
+            with f_col1:
+                busq_pend = st.text_input("🔎 Buscar por descripción, referencia o monto...", placeholder="Ej: PS 15469, GASTOS, 500000...")
+            with f_col2:
+                lado_filtro = st.selectbox(" Filtrar por Lado / Estado", ["Todos", "Solo Pendientes de Banco", "Solo Pendientes de Libros", "Solo Asientos Anulados"])
 
+        def _filtrar_df(df_in: pd.DataFrame) -> pd.DataFrame:
+            if df_in.empty or not busq_pend.strip():
+                return df_in
+            q = busq_pend.strip().lower()
+            mask = df_in.astype(str).apply(lambda col: col.str.lower().str.contains(q, na=False)).any(axis=1)
+            return df_in[mask]
+
+        if lado_filtro in ("Todos", "Solo Pendientes de Banco"):
+            with st.container(border=True):
+                st.subheader(f"🏛️ Pendientes de Banco ({len(res.banco_pendiente)})")
+                if res.banco_pendiente:
+                    df_pb = _filtrar_df(pd.DataFrame([vars(m) for m in res.banco_pendiente]))
+                    st.dataframe(df_pb[["id", "fecha", "monto", "descripcion", "referencia"]], use_container_width=True)
+                else:
+                    st.info("Sin partidas pendientes en banco.")
+
+        if lado_filtro in ("Todos", "Solo Pendientes de Libros"):
+            with st.container(border=True):
+                st.subheader(f"📖 Pendientes de Libros ({len(res.libros_pendiente)})")
+                if res.libros_pendiente:
+                    df_pl = _filtrar_df(pd.DataFrame([vars(m) for m in res.libros_pendiente]))
+                    st.dataframe(df_pl[["id", "fecha", "monto", "descripcion", "referencia"]], use_container_width=True)
+                else:
+                    st.info("Sin partidas pendientes en libros.")
+
+        if lado_filtro in ("Todos", "Solo Asientos Anulados"):
+            with st.container(border=True):
+                st.subheader(f"🚫 Asientos Anulados Neutralizados ({len(getattr(res, 'libros_anulados', []))})")
+                if getattr(res, "libros_anulados", None):
+                    lista_anulados = [
+                        {
+                            "id": m.id,
+                            "fecha": m.fecha,
+                            "monto": m.monto,
+                            "descripcion": m.descripcion,
+                            "referencia": m.referencia,
+                            "marca": marca,
+                        }
+                        for m, marca in res.libros_anulados
+                    ]
+                    df_pa = _filtrar_df(pd.DataFrame(lista_anulados))
+                    st.dataframe(df_pa[["id", "fecha", "monto", "descripcion", "referencia", "marca"]], use_container_width=True)
+                else:
+                    st.info("Sin asientos anulados detectados.")
+    else:
+        with st.container(border=True):
+            st.info("Ejecute una conciliación primero para visualizar y filtrar las partidas abiertas.")
+
+# --- VISTA: HISTORIAL INTERACTIVO CON CONSOLIDADO COMPLETO Y EDICIÓN EN VIVO ---
 elif menu_proceso == "Historial":
-    st.title("📜 Historial Permanente de Conciliaciones Cerradas")
-    st.markdown("Registro histórico persistente almacenado para auditoría, seguimiento y control.")
+    render_banner(
+        "📜 Historial de Conciliaciones y Editor de Consolidados",
+        "Consulte cierres anteriores, edite marcas u observaciones en vivo, descargue en Excel o reabra la conciliación en el motor.",
+    )
 
     historial_disco = cargar_historial_disco()
     if historial_disco:
-        st.success(f"Se encontraron {len(historial_disco)} conciliación(es) guardada(s) en el sistema.")
-        for idx, reg in enumerate(historial_disco):
-            with st.expander(f"Cierre del {reg.get('fecha_cierre', 'Sin fecha')} — Pares cerrados: {reg.get('pares_cerrados', 0)}"):
-                st.write(f"* **Pares cerrados (C1/C2):** {reg.get('pares_cerrados', 0)}")
-                st.write(f"* **Banco pendiente:** {reg.get('banco_pendiente', 0)}")
-                st.write(f"* **Libros pendiente:** {reg.get('libros_pendiente', 0)}")
-                st.write(f"* **Asientos anulados aislados:** {reg.get('libros_anulados', 0)}")
+        opciones_hist = [
+            f"{idx + 1}. {reg.get('etiqueta', 'Conciliación')} ({reg.get('fecha_cierre', 'Sin fecha')}) — Conciliados: {reg.get('pares_cerrados', 0)}"
+            for idx, reg in enumerate(historial_disco)
+        ]
+        idx_defecto = st.session_state.get("historial_seleccionado_idx", 0)
+        if idx_defecto >= len(opciones_hist):
+            idx_defecto = 0
+
+        seleccion = st.selectbox(
+            "Seleccione la conciliación histórica que desea inspeccionar o editar:",
+            options=range(len(opciones_hist)),
+            format_func=lambda i: opciones_hist[i],
+            index=idx_defecto,
+        )
+        reg_sel = historial_disco[seleccion]
+
+        with st.container(border=True):
+            c_m1, c_m2, c_m3, c_m4 = st.columns(4)
+            c_m1.metric("Pares Cerrados", reg_sel.get("pares_cerrados", 0))
+            c_m2.metric("Banco Pendiente", reg_sel.get("banco_pendiente", 0))
+            c_m3.metric("Libros Pendiente", reg_sel.get("libros_pendiente", 0))
+            c_m4.metric("Asientos Anulados", reg_sel.get("libros_anulados", 0))
+
+            col_acc1, col_acc2, col_acc3 = st.columns(3)
+            with col_acc1:
+                if st.button("🔄 Retomar / Reabrir en el Motor de Conciliación", type="primary", use_container_width=True):
+                    if retomar_conciliacion_historica(reg_sel):
+                        st.session_state.menu_proceso = "Conciliación"
+                        st.rerun()
+                    else:
+                        st.warning(
+                            "Este registro fue guardado con una versión anterior que solo almacenaba el resumen numérico. "
+                            "Guarde su conciliación actual con el botón '💾 Guardar en Historial' para almacenar el consolidado completo."
+                        )
+            with col_acc2:
+                nuevo_nombre = st.text_input(
+                    "Renombrar etiqueta del cierre:",
+                    value=reg_sel.get("etiqueta", ""),
+                    key=f"renombrar_{seleccion}",
+                    label_visibility="collapsed",
+                )
+            with col_acc3:
+                if st.button("🗑️ Eliminar este registro del Historial", use_container_width=True):
+                    historial_disco.pop(seleccion)
+                    guardar_lista_historial_disco(historial_disco)
+                    st.success("Registro eliminado del historial.")
+                    st.rerun()
+
+        # Tabla Consolidada Editable si el registro contiene las filas consolidadas
+        filas_guardadas = reg_sel.get("consolidado_rows", [])
+        if filas_guardadas:
+            st.markdown("### 📋 Tabla Consolidada de la Conciliación (Editable)")
+            st.caption(
+                "Puede modificar directamente la columna **Marca Conciliación**, **Naturaleza Contable** o añadir notas en **Observaciones / Ajustes**. "
+                "Luego presione **💾 Guardar Cambios en el Consolidado**."
+            )
+            df_hist_consolidado = pd.DataFrame(filas_guardadas)
+            if "Observaciones / Ajustes" not in df_hist_consolidado.columns:
+                df_hist_consolidado["Observaciones / Ajustes"] = ""
+
+            df_editado = st.data_editor(
+                df_hist_consolidado,
+                use_container_width=True,
+                num_rows="dynamic",
+                key=f"editor_hist_{seleccion}",
+                column_config={
+                    "Marca Conciliación": st.column_config.SelectboxColumn(
+                        "Marca Conciliación",
+                        options=[
+                            "Conciliado (C1)",
+                            "Conciliado (C2)",
+                            "Conciliado (Manual)",
+                            "Por conciliar (Banco)",
+                            "Por conciliar (Libros)",
+                            "Asiento Anulado",
+                        ],
+                        required=True,
+                    ),
+                },
+            )
+
+            c_save, c_dl = st.columns(2)
+            with c_save:
+                if st.button("💾 Guardar Cambios en el Consolidado Histórico", type="primary", use_container_width=True):
+                    df_recalc = recalcular_porcentajes_consolidado(df_editado)
+                    historial_disco[seleccion]["etiqueta"] = nuevo_nombre.strip() or reg_sel.get("etiqueta", "Conciliación")
+                    historial_disco[seleccion]["consolidado_rows"] = df_recalc.to_dict(orient="records")
+                    # Actualizar conteos según las marcas editadas
+                    marcas_s = df_recalc["Marca Conciliación"].astype(str)
+                    historial_disco[seleccion]["pares_cerrados"] = int(marcas_s.str.startswith("Conciliado").sum())
+                    historial_disco[seleccion]["banco_pendiente"] = int((marcas_s == "Por conciliar (Banco)").sum())
+                    historial_disco[seleccion]["libros_pendiente"] = int((marcas_s == "Por conciliar (Libros)").sum())
+                    historial_disco[seleccion]["libros_anulados"] = int((marcas_s == "Asiento Anulado").sum())
+                    guardar_lista_historial_disco(historial_disco)
+                    st.success("✅ ¡Cambios guardados exitosamente en el consolidado histórico!")
+                    st.rerun()
+
+            with c_dl:
+                excel_hist_bytes = empaquetar_excel_consolidado(
+                    df_editado,
+                    reg_sel.get("pregunta_ia", ""),
+                    reg_sel.get("analisis_ia", ""),
+                )
+                st.download_button(
+                    label="📥 Descargar este Consolidado Editado en Excel (.xlsx)",
+                    data=excel_hist_bytes,
+                    file_name=f"Consolidado_{reg_sel.get('id_cierre', 'Historico')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                )
+        else:
+            st.info(
+                "ℹ️ Este registro fue creado antes de activar el guardado de tabla consolidada completa. "
+                "Vaya a **Conciliación** y presione **💾 Guardar en Historial** para almacenar el consolidado editable."
+            )
     else:
-        st.info("No hay conciliaciones guardadas en el historial todavía. Ejecute una conciliación y haga clic en 'Guardar Conciliación Actual en Historial'.")
+        st.info("No hay conciliaciones guardadas en el historial todavía. Ejecute una conciliación y haga clic en '💾 Guardar en Historial'.")
