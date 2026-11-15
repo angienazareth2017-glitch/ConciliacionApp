@@ -7,7 +7,15 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-# Importación de tus motores lógicos locales
+# Importación de tus motores lógicos locales (Corregido y agregado)
+from conciliar import (
+    Config,
+    ErrorDeParseo,
+    calcular_cuadre,
+    cargar_movimientos,
+    conciliar,
+)
+from tasas import TablaTasas, TasaNoDisponible
 
 # =============================================================================
 # 1. CONFIGURACIÓN INICIAL DE LA PÁGINA
