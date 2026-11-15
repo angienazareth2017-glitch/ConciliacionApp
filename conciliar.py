@@ -7,15 +7,6 @@ import time
 from datetime import date
 from decimal import Decimal as D
 
-
-import tasas
-from conciliar import (
-    Config, ErrorDeParseo, Movimiento, calcular_cuadre, cargar_movimientos,
-    clasificar_movimiento, conciliar, neutralizar_reversos, normalizar_referencia,
-    parsear_fecha, parsear_monto, referencias_coinciden,
-)
-
-
 def B(id_, fecha, monto, desc="", ref=""):
     return Movimiento(id_, "banco", fecha, D(str(monto)), desc, ref)
 
