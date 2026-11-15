@@ -1,14 +1,23 @@
 """
 aplicacion.py - Aplicación web principal en Streamlit para el 
-Sistema de Conciliación y Tesorería Multidivisa con Asistente IA conectado a datos reales,
-Descarga de Análisis IA, Reporte Excel Completo y Historial Persistente.
+Sistema de Conciliación y Tesorería Multidivisa con:
+- Aislamiento previo de Asientos Anulados.
+- Clasificación de Naturaleza Contable (distinguiendo Transferencias entre Cuentas Propias,
+  Ingresos por Ventas/Clientes, Ingresos Bancarios/Intereses, Devoluciones y Egresos Operativos).
+- Reporte Excel Consolidado con peso porcentual (%) por partida sobre Total Ingresos y Total Egresos,
+  fila de Totales y pestañas de Top / Distribución Porcentual.
+- Asistente IA conectado a datos reales del Mayor y exportación directa a Word (.docx) y Excel (.xlsx).
 """
 from __future__ import annotations
 
 import io
 import json
 import os
+import re
+import zipfile
 from datetime import datetime
+from xml.sax.saxutils import escape as xml_escape
+
 import pandas as pd
 import streamlit as st
 
@@ -60,10 +69,83 @@ def guardar_en_historial(resumen_dict: dict) -> None:
         pass
 
 
+# =============================================================================
+# 2. CLASIFICACIÓN CONTABLE DE INGRESOS Y EGRESOS (CUENTAS PROPIAS VS TERCEROS)
+# =============================================================================
+_PATRON_BANCOS_PROPIOS = re.compile(
+    r"\b(banco|banesco|mercantil|provincial|bnc|nacional de credito|venezuela|"
+    r"bancamiga|tesoro|bancaribe|exterior|plaza|caroni|activo|sofitasa|100%\s*banco)\b",
+    re.IGNORECASE,
+)
+_PATRON_INGRESO_BANCARIO = re.compile(
+    r"\b(interes\w*|rendimiento\w*|abono intereses|intereses bancarios)\b",
+    re.IGNORECASE,
+)
+_PATRON_DEVOLUCION = re.compile(
+    r"\b(devoluc\w*|reintegro\w*|reembolso\w*|reverso|error|nota de credito)\b",
+    re.IGNORECASE,
+)
+_PATRON_ANTICIPO_VENTAS = re.compile(
+    r"\b(anticipo\w*|viatico\w*|representantes de ventas|gastos de viaje)\b",
+    re.IGNORECASE,
+)
+_PATRON_NOMINA = re.compile(
+    r"\b(nomina|nómina|sueldo\w*|salario\w*|vacacion\w*|liquidacion\w*|utilidades|cestaticket)\b",
+    re.IGNORECASE,
+)
+_PATRON_CXC_INTERNAS = re.compile(
+    r"\b(cuentas por cobrar accionistas|cuentas por cobrar personal|prestamo\w*)\b",
+    re.IGNORECASE,
+)
+_PATRON_PARAFISCAL_IMPUESTO = re.compile(
+    r"\b(i\.?v\.?s\.?s|f\.?a\.?o\.?v|inces|seniat|insai|igtf|impuesto\w*|retencion\w*|alcaldia)\b",
+    re.IGNORECASE,
+)
+
+
+def clasificar_naturaleza_contable(desc_mayor: str, desc_banco: str, monto_mayor: float, monto_banco: float, marca: str) -> str:
+    """
+    Distingue con precisión la naturaleza del movimiento para separar:
+    - Transferencias entre Cuentas Propias (Fondeos entre bancos de la empresa)
+    - Ingresos por Ventas / Cobranzas de Clientes
+    - Ingresos Bancarios (Intereses)
+    - Ingresos por Devoluciones / Reintegros de Proveedores
+    - Categorías clave de Egresos
+    """
+    if marca == "Asiento Anulado":
+        return "Asiento Anulado (Neutralizado)"
+
+    texto = (str(desc_mayor or "").strip() or str(desc_banco or "").strip())
+    monto = float(monto_mayor) if float(monto_mayor) != 0.0 else float(monto_banco)
+
+    if monto > 0:
+        if _PATRON_BANCOS_PROPIOS.search(texto):
+            return "Ingreso por Transferencia entre Cuentas Propias"
+        if _PATRON_INGRESO_BANCARIO.search(texto):
+            return "Ingreso Bancario / Intereses"
+        if _PATRON_DEVOLUCION.search(texto):
+            return "Ingreso por Devolución / Reintegro"
+        return "Ingreso por Ventas / Cobranza a Clientes"
+    elif monto < 0:
+        if _PATRON_BANCOS_PROPIOS.search(texto):
+            return "Egreso por Transferencia entre Cuentas Propias"
+        if _PATRON_ANTICIPO_VENTAS.search(texto):
+            return "Egreso - Anticipos y Viáticos de Ventas"
+        if _PATRON_NOMINA.search(texto):
+            return "Egreso - Nómina y Personal"
+        if _PATRON_CXC_INTERNAS.search(texto):
+            return "Egreso - Cuentas por Cobrar Accionistas / Personal"
+        if _PATRON_PARAFISCAL_IMPUESTO.search(texto):
+            return "Egreso - Impuestos y Parafiscales"
+        return "Egreso - Pagos a Proveedores y Operativos"
+    return "Sin monto"
+
+
 def construir_dataframe_consolidado(res, tabla_t) -> pd.DataFrame:
     """
-    Construye el DataFrame consolidado completo (Conciliados, Pendientes Banco,
-    Pendientes Libros y Asientos Anulados) con los textos literales de origen.
+    Construye el DataFrame consolidado completo e incorpora:
+    - Naturaleza Contable (Cuentas Propias vs Ventas Clientes vs Bancarios vs Proveedores)
+    - % sobre Total Ingresos Mayor y % sobre Total Egresos Mayor para cada partida.
     """
     filas_excel = []
 
@@ -88,16 +170,23 @@ def construir_dataframe_consolidado(res, tabla_t) -> pd.DataFrame:
                 except Exception:
                     pass
 
+            m_bco = float(mb.monto) if mb else 0.0
+            m_may = float(ml.monto) if ml else 0.0
+            d_bco = mb.descripcion if mb else ""
+            d_may = ml.descripcion if ml else ""
+            marca = f"Conciliado ({par.regla})"
+
             filas_excel.append({
                 "Banco - Fecha": mb.fecha if mb else "",
-                "Banco - Descripción": mb.descripcion if mb else "",
+                "Banco - Descripción": d_bco,
                 "Banco - Referencia": mb.referencia if mb else "",
-                "Banco - Monto": float(mb.monto) if mb else 0.0,
+                "Banco - Monto": m_bco,
                 "Mayor - Fecha": ml.fecha if ml else "",
-                "Mayor - Descripción": ml.descripcion if ml else "",
+                "Mayor - Descripción": d_may,
                 "Mayor - Referencia": ml.referencia if ml else "",
-                "Mayor - Monto": float(ml.monto) if ml else 0.0,
-                "Marca Conciliación": f"Conciliado ({par.regla})",
+                "Mayor - Monto": m_may,
+                "Marca Conciliación": marca,
+                "Naturaleza Contable": clasificar_naturaleza_contable(d_may, d_bco, m_may, m_bco, marca),
                 "Tasa BCV USD": tasa_usd_val,
                 "Monto Convertido USD": monto_usd,
             })
@@ -113,16 +202,19 @@ def construir_dataframe_consolidado(res, tabla_t) -> pd.DataFrame:
         except Exception:
             pass
 
+        m_bco = float(mb.monto)
+        marca = "Por conciliar (Banco)"
         filas_excel.append({
             "Banco - Fecha": mb.fecha,
             "Banco - Descripción": mb.descripcion,
             "Banco - Referencia": mb.referencia,
-            "Banco - Monto": float(mb.monto),
+            "Banco - Monto": m_bco,
             "Mayor - Fecha": "",
             "Mayor - Descripción": "",
             "Mayor - Referencia": "",
             "Mayor - Monto": 0.0,
-            "Marca Conciliación": "Por conciliar (Banco)",
+            "Marca Conciliación": marca,
+            "Naturaleza Contable": clasificar_naturaleza_contable("", mb.descripcion, 0.0, m_bco, marca),
             "Tasa BCV USD": tasa_usd_val,
             "Monto Convertido USD": monto_usd,
         })
@@ -138,6 +230,8 @@ def construir_dataframe_consolidado(res, tabla_t) -> pd.DataFrame:
         except Exception:
             pass
 
+        m_may = float(ml.monto)
+        marca = "Por conciliar (Libros)"
         filas_excel.append({
             "Banco - Fecha": "",
             "Banco - Descripción": "",
@@ -146,8 +240,9 @@ def construir_dataframe_consolidado(res, tabla_t) -> pd.DataFrame:
             "Mayor - Fecha": ml.fecha,
             "Mayor - Descripción": ml.descripcion,
             "Mayor - Referencia": ml.referencia,
-            "Mayor - Monto": float(ml.monto),
-            "Marca Conciliación": "Por conciliar (Libros)",
+            "Mayor - Monto": m_may,
+            "Marca Conciliación": marca,
+            "Naturaleza Contable": clasificar_naturaleza_contable(ml.descripcion, "", m_may, 0.0, marca),
             "Tasa BCV USD": tasa_usd_val,
             "Monto Convertido USD": monto_usd,
         })
@@ -163,6 +258,7 @@ def construir_dataframe_consolidado(res, tabla_t) -> pd.DataFrame:
         except Exception:
             pass
 
+        m_may = float(ml.monto)
         filas_excel.append({
             "Banco - Fecha": "",
             "Banco - Descripción": "",
@@ -171,115 +267,432 @@ def construir_dataframe_consolidado(res, tabla_t) -> pd.DataFrame:
             "Mayor - Fecha": ml.fecha,
             "Mayor - Descripción": ml.descripcion,
             "Mayor - Referencia": ml.referencia,
-            "Mayor - Monto": float(ml.monto),
+            "Mayor - Monto": m_may,
             "Marca Conciliación": marca_anulado,
+            "Naturaleza Contable": "Asiento Anulado (Neutralizado)",
             "Tasa BCV USD": tasa_usd_val,
             "Monto Convertido USD": monto_usd,
         })
 
-    return pd.DataFrame(filas_excel)
+    df = pd.DataFrame(filas_excel)
+    if df.empty:
+        return df
+
+    # Calcular totales activos de Mayor (excluyendo asientos anulados) para los pesos porcentuales
+    mask_activo = df["Marca Conciliación"] != "Asiento Anulado"
+    total_ingresos_mayor = df.loc[mask_activo & (df["Mayor - Monto"] > 0), "Mayor - Monto"].sum()
+    total_egresos_mayor = df.loc[mask_activo & (df["Mayor - Monto"] < 0), "Mayor - Monto"].abs().sum()
+
+    pct_ing_list = []
+    pct_egr_list = []
+    for _, row in df.iterrows():
+        if row["Marca Conciliación"] == "Asiento Anulado":
+            pct_ing_list.append(0.0)
+            pct_egr_list.append(0.0)
+            continue
+        val_m = float(row["Mayor - Monto"])
+        if val_m > 0 and total_ingresos_mayor > 0:
+            pct_ing_list.append(round((val_m / total_ingresos_mayor) * 100.0, 2))
+            pct_egr_list.append(0.0)
+        elif val_m < 0 and total_egresos_mayor > 0:
+            pct_ing_list.append(0.0)
+            pct_egr_list.append(round((abs(val_m) / total_egresos_mayor) * 100.0, 2))
+        else:
+            pct_ing_list.append(0.0)
+            pct_egr_list.append(0.0)
+
+    df["% s/ Total Ingresos Mayor"] = pct_ing_list
+    df["% s/ Total Egresos Mayor"] = pct_egr_list
+    return df
+
+
+def generar_tablas_distribucion(df_rep: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """
+    Genera 3 DataFrames analíticos para exportar en pestañas de Excel:
+    1) Resumen Ejecutivo de Totales (Ingresos por Ventas vs Transferencias Cuentas Propias vs Egresos)
+    2) Top y Distribución Porcentual de Egresos por 'Mayor - Descripción'
+    3) Top y Distribución Porcentual de Ingresos por 'Mayor - Descripción' (con peso sobre Total y sobre Ventas Clientes)
+    """
+    if df_rep.empty:
+        vacio = pd.DataFrame()
+        return vacio, vacio, vacio
+
+    df_act = df_rep[
+        (df_rep["Mayor - Descripción"].astype(str).str.strip() != "")
+        & (df_rep["Marca Conciliación"] != "Asiento Anulado")
+    ].copy()
+
+    # 1. Tabla de Egresos Agrupada
+    egresos = df_act[df_act["Mayor - Monto"] < 0].copy()
+    if not egresos.empty:
+        egresos["Monto_VES"] = egresos["Mayor - Monto"].abs()
+        egresos["Monto_USD"] = egresos["Monto Convertido USD"].abs()
+        tot_eg_ves = egresos["Monto_VES"].sum()
+        tot_eg_usd = egresos["Monto_USD"].sum()
+
+        df_dist_egresos = (
+            egresos.groupby(["Mayor - Descripción", "Naturaleza Contable"], as_index=False)
+            .agg(
+                Movimientos=("Monto_VES", "count"),
+                Monto_Total_VES=("Monto_VES", "sum"),
+                Monto_Total_USD=("Monto_USD", "sum"),
+            )
+            .sort_values("Monto_Total_VES", ascending=False)
+        )
+        df_dist_egresos["% sobre Total Egresos"] = (
+            (df_dist_egresos["Monto_Total_VES"] / tot_eg_ves * 100.0).round(2) if tot_eg_ves > 0 else 0.0
+        )
+        # Fila de Total
+        fila_tot_eg = pd.DataFrame([{
+            "Mayor - Descripción": "TOTAL EGRESOS MAYOR (SIN ANULADOS)",
+            "Naturaleza Contable": "TOTAL",
+            "Movimientos": int(df_dist_egresos["Movimientos"].sum()),
+            "Monto_Total_VES": round(tot_eg_ves, 2),
+            "Monto_Total_USD": round(tot_eg_usd, 2),
+            "% sobre Total Egresos": 100.0,
+        }])
+        df_dist_egresos = pd.concat([df_dist_egresos, fila_tot_eg], ignore_index=True)
+    else:
+        df_dist_egresos = pd.DataFrame()
+
+    # 2. Tabla de Ingresos Agrupada (separando Transferencias Propias de Ventas Clientes)
+    ingresos = df_act[df_act["Mayor - Monto"] > 0].copy()
+    if not ingresos.empty:
+        ingresos["Monto_VES"] = ingresos["Mayor - Monto"]
+        ingresos["Monto_USD"] = ingresos["Monto Convertido USD"]
+        tot_in_ves = ingresos["Monto_VES"].sum()
+        tot_in_usd = ingresos["Monto_USD"].sum()
+
+        tot_ventas_clientes = ingresos.loc[
+            ingresos["Naturaleza Contable"] == "Ingreso por Ventas / Cobranza a Clientes", "Monto_VES"
+        ].sum()
+
+        df_dist_ingresos = (
+            ingresos.groupby(["Mayor - Descripción", "Naturaleza Contable"], as_index=False)
+            .agg(
+                Movimientos=("Monto_VES", "count"),
+                Monto_Total_VES=("Monto_VES", "sum"),
+                Monto_Total_USD=("Monto_USD", "sum"),
+            )
+            .sort_values("Monto_Total_VES", ascending=False)
+        )
+        df_dist_ingresos["% s/ Total Ingresos General"] = (
+            (df_dist_ingresos["Monto_Total_VES"] / tot_in_ves * 100.0).round(2) if tot_in_ves > 0 else 0.0
+        )
+        df_dist_ingresos["% s/ Ingresos por Ventas (Clientes)"] = df_dist_ingresos.apply(
+            lambda r: round((r["Monto_Total_VES"] / tot_ventas_clientes) * 100.0, 2)
+            if r["Naturaleza Contable"] == "Ingreso por Ventas / Cobranza a Clientes" and tot_ventas_clientes > 0
+            else 0.0,
+            axis=1,
+        )
+        fila_tot_in = pd.DataFrame([{
+            "Mayor - Descripción": "TOTAL INGRESOS MAYOR (SIN ANULADOS)",
+            "Naturaleza Contable": "TOTAL",
+            "Movimientos": int(df_dist_ingresos["Movimientos"].sum()),
+            "Monto_Total_VES": round(tot_in_ves, 2),
+            "Monto_Total_USD": round(tot_in_usd, 2),
+            "% s/ Total Ingresos General": 100.0,
+            "% s/ Ingresos por Ventas (Clientes)": 100.0 if tot_ventas_clientes > 0 else 0.0,
+        }])
+        df_dist_ingresos = pd.concat([df_dist_ingresos, fila_tot_in], ignore_index=True)
+    else:
+        df_dist_ingresos = pd.DataFrame()
+
+    # 3. Resumen Ejecutivo por Naturaleza Contable
+    if not df_act.empty:
+        df_res_nat = (
+            df_act.groupby("Naturaleza Contable", as_index=False)
+            .agg(
+                Cantidad_Partidas=("Mayor - Monto", "count"),
+                Monto_Neto_VES=("Mayor - Monto", "sum"),
+                Monto_Neto_USD=("Monto Convertido USD", "sum"),
+            )
+            .sort_values("Monto_Neto_VES", ascending=False)
+        )
+    else:
+        df_res_nat = pd.DataFrame()
+
+    return df_res_nat, df_dist_egresos, df_dist_ingresos
+
+
+# =============================================================================
+# 3. EXPORTADOR NATIVO A WORD (.DOCX) CON SOPORTE DE TABLAS Y FORMATO EJECUTIVO
+# =============================================================================
+def generar_word_analisis_ia(pregunta: str, respuesta_md: str, df_res_nat: pd.DataFrame, df_eg: pd.DataFrame, df_in: pd.DataFrame) -> bytes:
+    """
+    Genera un documento Word (.docx) válido y profesional con el análisis de la IA
+    y las tablas numéricas de distribución porcentual de Ingresos y Egresos.
+    Funciona nativamente en cualquier servidor sin requerir librerías externas adicionales.
+    """
+    parrafos_xml = []
+
+    def _p_titulo(texto: str, nivel: int = 1) -> str:
+        tam = "32" if nivel == 1 else ("26" if nivel == 2 else "22")
+        color = "1B4332" if nivel == 1 else "2D6A4F"
+        t_esc = xml_escape(texto)
+        return (
+            f'<w:p><w:pPr><w:spacing w:before="200" w:after="100"/></w:pPr>'
+            f'<w:r><w:rPr><w:b/><w:color w:val="{color}"/><w:sz w:val="{tam}"/></w:rPr>'
+            f'<w:t>{t_esc}</w:t></w:r></w:p>'
+        )
+
+    def _p_texto(texto: str, negrita: bool = False) -> str:
+        t_esc = xml_escape(texto)
+        b_tag = "<w:b/>" if negrita else ""
+        return (
+            f'<w:p><w:pPr><w:spacing w:after="80"/></w:pPr>'
+            f'<w:r><w:rPr>{b_tag}<w:sz w:val="21"/></w:rPr>'
+            f'<w:t xml:space="preserve">{t_esc}</w:t></w:r></w:p>'
+        )
+
+    def _tabla_xml(encabezados: list[str], filas: list[list[str]]) -> str:
+        bord = (
+            '<w:tblBorders>'
+            '<w:top w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/>'
+            '<w:left w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/>'
+            '<w:bottom w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/>'
+            '<w:right w:val="single" w:sz="4" w:space="0" w:color="CCCCCC"/>'
+            '<w:insideH w:val="single" w:sz="4" w:space="0" w:color="E2E8F0"/>'
+            '<w:insideV w:val="single" w:sz="4" w:space="0" w:color="E2E8F0"/>'
+            '</w:tblBorders>'
+        )
+        xml_t = [f'<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/>{bord}</w:tblPr>']
+        # Encabezado
+        xml_t.append("<w:tr>")
+        for h in encabezados:
+            h_esc = xml_escape(str(h))
+            xml_t.append(
+                f'<w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="1B4332"/></w:tcPr>'
+                f'<w:p><w:r><w:rPr><w:b/><w:color w:val="FFFFFF"/><w:sz w:val="19"/></w:rPr>'
+                f'<w:t>{h_esc}</w:t></w:r></w:p></w:tc>'
+            )
+        xml_t.append("</w:tr>")
+        # Filas
+        for idx_f, fila in enumerate(filas):
+            fill_c = "F8FAFC" if idx_f % 2 == 1 else "FFFFFF"
+            xml_t.append("<w:tr>")
+            for celda in fila:
+                c_esc = xml_escape(str(celda))
+                xml_t.append(
+                    f'<w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="{fill_c}"/></w:tcPr>'
+                    f'<w:p><w:r><w:rPr><w:sz w:val="19"/></w:rPr>'
+                    f'<w:t xml:space="preserve">{c_esc}</w:t></w:r></w:p></w:tc>'
+                )
+            xml_t.append("</w:tr>")
+        xml_t.append("</w:tbl>")
+        return "".join(xml_t)
+
+    # Encabezado del documento
+    parrafos_xml.append(_p_titulo("Informe Ejecutivo de Conciliación y Tesorería (IA)", 1))
+    parrafos_xml.append(_p_texto(f"Fecha de emisión: {datetime.now().strftime('%Y-%m-%d %H:%M')}", negrita=True))
+    if pregunta:
+        parrafos_xml.append(_p_texto(f"Consulta analizada: {pregunta}", negrita=True))
+
+    # Parsear el Markdown del asistente (incluyendo tablas Markdown si las hubiera)
+    lineas_md = (respuesta_md or "").splitlines()
+    buffer_tabla = []
+
+    def _vaciar_buffer_tabla():
+        nonlocal buffer_tabla
+        if not buffer_tabla:
+            return
+        filas_limpias = []
+        for l_tab in buffer_tabla:
+            partes = [c.strip() for c in l_tab.strip().strip("|").split("|")]
+            # Ignorar fila separadora de markdown (---|---|---)
+            if all(set(p) <= set("-: ") for p in partes if p):
+                continue
+            filas_limpias.append(partes)
+        if len(filas_limpias) >= 2:
+            parrafos_xml.append(_tabla_xml(filas_limpias[0], filas_limpias[1:]))
+        buffer_tabla = []
+
+    for lin in lineas_md:
+        s = lin.strip()
+        if s.startswith("|") and s.endswith("|") and "|" in s[1:-1]:
+            buffer_tabla.append(s)
+            continue
+        else:
+            _vaciar_buffer_tabla()
+
+        if not s:
+            continue
+        if s.startswith("### "):
+            parrafos_xml.append(_p_titulo(s.replace("### ", "").replace("**", ""), 3))
+        elif s.startswith("## "):
+            parrafos_xml.append(_p_titulo(s.replace("## ", "").replace("**", ""), 2))
+        elif s.startswith("# "):
+            parrafos_xml.append(_p_titulo(s.replace("# ", "").replace("**", ""), 1))
+        else:
+            limpio = s.replace("**", "")
+            parrafos_xml.append(_p_texto(limpio))
+
+    _vaciar_buffer_tabla()
+
+    # Añadir tablas numéricas estructuradas al final del Word
+    if not df_res_nat.empty:
+        parrafos_xml.append(_p_titulo("Resumen por Naturaleza Contable (Cuentas Propias vs Operativo)", 2))
+        filas_nat = [
+            [
+                r["Naturaleza Contable"],
+                str(int(r["Cantidad_Partidas"])),
+                f"{float(r['Monto_Neto_VES']):,.2f}",
+                f"{float(r['Monto_Neto_USD']):,.2f}",
+            ]
+            for _, r in df_res_nat.iterrows()
+        ]
+        parrafos_xml.append(_tabla_xml(["Naturaleza Contable", "Partidas", "Monto Neto (VES)", "Monto Neto (USD)"], filas_nat))
+
+    if not df_in.empty:
+        parrafos_xml.append(_p_titulo("Top y Distribución Porcentual de Ingresos (Mayor)", 2))
+        filas_in = [
+            [
+                r["Mayor - Descripción"],
+                r["Naturaleza Contable"],
+                str(int(r["Movimientos"])),
+                f"{float(r['Monto_Total_VES']):,.2f}",
+                f"{float(r['% s/ Total Ingresos General']):.2f}%",
+                f"{float(r['% s/ Ingresos por Ventas (Clientes)']):.2f}%",
+            ]
+            for _, r in df_in.head(20).iterrows()
+        ]
+        parrafos_xml.append(
+            _tabla_xml(
+                ["Mayor - Descripción", "Clasificación", "Mov.", "Total VES", "% Total Ing.", "% Ventas Clientes"],
+                filas_in,
+            )
+        )
+
+    if not df_eg.empty:
+        parrafos_xml.append(_p_titulo("Top y Distribución Porcentual de Egresos (Mayor)", 2))
+        filas_eg = [
+            [
+                r["Mayor - Descripción"],
+                r["Naturaleza Contable"],
+                str(int(r["Movimientos"])),
+                f"{float(r['Monto_Total_VES']):,.2f}",
+                f"{float(r['% sobre Total Egresos']):.2f}%",
+            ]
+            for _, r in df_eg.head(20).iterrows()
+        ]
+        parrafos_xml.append(
+            _tabla_xml(
+                ["Mayor - Descripción", "Clasificación", "Mov.", "Total VES", "% Total Egresos"],
+                filas_eg,
+            )
+        )
+
+    body_xml = "".join(parrafos_xml)
+    document_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        f"<w:body>{body_xml}<w:sectPr/></w:body></w:document>"
+    )
+    content_types_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+        "</Types>"
+    )
+    rels_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
+        "</Relationships>"
+    )
+
+    mem_zip = io.BytesIO()
+    with zipfile.ZipFile(mem_zip, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("[Content_Types].xml", content_types_xml)
+        zf.writestr("_rels/.rels", rels_xml)
+        zf.writestr("word/document.xml", document_xml)
+    return mem_zip.getvalue()
 
 
 def construir_contexto_ia_real(df_rep: pd.DataFrame, res) -> str:
     """
     Construye un contexto detallado basado EXCLUSIVAMENTE en los datos reales
-    cargados por el usuario, respetando el texto literal de 'Mayor - Descripción'
-    y 'Banco - Descripción'.
+    cargados por el usuario, separando explícitamente en los Ingresos:
+    1) Transferencias entre Cuentas Propias (Fondeos bancarios internos)
+    2) Ingresos por Ventas / Cobranzas a Clientes
+    3) Ingresos Bancarios (Intereses)
+    4) Devoluciones / Reintegros
     """
     if df_rep.empty:
         return "No hay movimientos en el reporte."
 
-    lineas = []
-    lineas.append("=== RESUMEN GENERAL EXACTO ===")
-    lineas.append(f"- Pares conciliados: {len(res.pares)}")
-    lineas.append(f"- Pendientes en Banco: {len(res.banco_pendiente)}")
-    lineas.append(f"- Pendientes en Libros: {len(res.libros_pendiente)}")
-    lineas.append(f"- Asientos Anulados aislados: {len(getattr(res, 'libros_anulados', []))}")
-
-    # Agrupación real por el escrito literal de 'Mayor - Descripción' (excluyendo anulados)
-    df_mayor_activos = df_rep[
+    df_act = df_rep[
         (df_rep["Mayor - Descripción"].astype(str).str.strip() != "")
         & (df_rep["Marca Conciliación"] != "Asiento Anulado")
     ].copy()
 
-    if not df_mayor_activos.empty:
-        lineas.append("\n=== DISTRIBUCIÓN Y TOP POR 'Mayor - Descripción' (ESCRITO LITERAL DE ORIGEN, SIN ANULADOS) ===")
-        # Egresos / Salidas en Mayor
-        egresos_m = df_mayor_activos[df_mayor_activos["Mayor - Monto"] < 0].copy()
-        if not egresos_m.empty:
-            egresos_m["Monto_Abs"] = egresos_m["Mayor - Monto"].abs()
-            total_eg_m = egresos_m["Monto_Abs"].sum()
-            grp_eg = (
-                egresos_m.groupby("Mayor - Descripción", as_index=False)
-                .agg(
-                    Cantidad=("Monto_Abs", "count"),
-                    Total_VES=("Monto_Abs", "sum"),
-                    Total_USD=("Monto Convertido USD", lambda s: s.abs().sum()),
-                )
-                .sort_values("Total_VES", ascending=False)
-            )
-            lineas.append(f"--- EGRESOS EN MAYOR (Total Egresos Mayor: {total_eg_m:,.2f} VES) ---")
-            for _, r in grp_eg.iterrows():
-                pct = (r["Total_VES"] / total_eg_m * 100.0) if total_eg_m > 0 else 0.0
-                lineas.append(
-                    f"  * Concepto exacto Mayor: '{r['Mayor - Descripción']}' | Movimientos: {int(r['Cantidad'])} | "
-                    f"Monto Total VES: {r['Total_VES']:,.2f} | Porcentaje: {pct:.2f}% | USD: {r['Total_USD']:,.2f}"
-                )
+    tot_ing_general = df_act.loc[df_act["Mayor - Monto"] > 0, "Mayor - Monto"].sum()
+    tot_egr_general = df_act.loc[df_act["Mayor - Monto"] < 0, "Mayor - Monto"].abs().sum()
 
-        # Ingresos / Entradas en Mayor
-        ingresos_m = df_mayor_activos[df_mayor_activos["Mayor - Monto"] > 0].copy()
-        if not ingresos_m.empty:
-            total_in_m = ingresos_m["Mayor - Monto"].sum()
-            grp_in = (
-                ingresos_m.groupby("Mayor - Descripción", as_index=False)
-                .agg(
-                    Cantidad=("Mayor - Monto", "count"),
-                    Total_VES=("Mayor - Monto", "sum"),
-                    Total_USD=("Monto Convertido USD", "sum"),
-                )
-                .sort_values("Total_VES", ascending=False)
-            )
-            lineas.append(f"\n--- INGRESOS EN MAYOR (Total Ingresos Mayor: {total_in_m:,.2f} VES) ---")
-            for _, r in grp_in.iterrows():
-                pct = (r["Total_VES"] / total_in_m * 100.0) if total_in_m > 0 else 0.0
-                lineas.append(
-                    f"  * Concepto exacto Mayor: '{r['Mayor - Descripción']}' | Movimientos: {int(r['Cantidad'])} | "
-                    f"Monto Total VES: {r['Total_VES']:,.2f} | Porcentaje: {pct:.2f}% | USD: {r['Total_USD']:,.2f}"
-                )
+    ing_propias = df_act.loc[
+        df_act["Naturaleza Contable"] == "Ingreso por Transferencia entre Cuentas Propias", "Mayor - Monto"
+    ].sum()
+    ing_clientes = df_act.loc[
+        df_act["Naturaleza Contable"] == "Ingreso por Ventas / Cobranza a Clientes", "Mayor - Monto"
+    ].sum()
+    ing_bancarios = df_act.loc[
+        df_act["Naturaleza Contable"] == "Ingreso Bancario / Intereses", "Mayor - Monto"
+    ].sum()
+    ing_devoluciones = df_act.loc[
+        df_act["Naturaleza Contable"] == "Ingreso por Devolución / Reintegro", "Mayor - Monto"
+    ].sum()
 
-    # Top 30 Movimientos individuales de Mayor (por magnitud de monto, sin anulados)
-    if not df_mayor_activos.empty:
-        df_top_m = df_mayor_activos.assign(Abs_Monto=df_mayor_activos["Mayor - Monto"].abs()).sort_values(
-            "Abs_Monto", ascending=False
-        ).head(30)
-        lineas.append("\n=== TOP 30 MOVIMIENTOS INDIVIDUALES DEL MAYOR CONTABLE ===")
-        for _, r in df_top_m.iterrows():
+    lineas = []
+    lineas.append("=== RESUMEN EJECUTIVO Y DESGLOSE DE INGRESOS (CUENTAS PROPIAS VS VENTAS REALES) ===")
+    lineas.append(f"- Pares conciliados: {len(res.pares)}")
+    lineas.append(f"- Pendientes en Banco: {len(res.banco_pendiente)}")
+    lineas.append(f"- Pendientes en Libros: {len(res.libros_pendiente)}")
+    lineas.append(f"- Asientos Anulados aislados (neutralizados): {len(getattr(res, 'libros_anulados', []))}")
+    lineas.append(f"- TOTAL INGRESOS BRUTOS EN MAYOR (sin anulados): {tot_ing_general:,.2f} VES")
+    lineas.append(
+        f"   * De los cuales: TRANSFERENCIAS ENTRE CUENTAS PROPIAS / FONDEOS INTERNOS (ej. Banco Banesco, BNC): "
+        f"{ing_propias:,.2f} VES ({(ing_propias/tot_ing_general*100 if tot_ing_general else 0):.2f}% del total entradas)"
+    )
+    lineas.append(
+        f"   * De los cuales: INGRESOS REALES POR VENTAS / COBRANZAS A CLIENTES: "
+        f"{ing_clientes:,.2f} VES ({(ing_clientes/tot_ing_general*100 if tot_ing_general else 0):.2f}% del total entradas)"
+    )
+    lineas.append(f"   * De los cuales: INGRESOS BANCARIOS / INTERESES: {ing_bancarios:,.2f} VES")
+    lineas.append(f"   * De los cuales: INGRESOS POR DEVOLUCIONES / REINTEGROS: {ing_devoluciones:,.2f} VES")
+    lineas.append(f"- TOTAL EGRESOS EN MAYOR (sin anulados): {tot_egr_general:,.2f} VES")
+    lineas.append(f"- FLUJO NETO TOTAL EN MAYOR: {(tot_ing_general - tot_egr_general):,.2f} VES")
+
+    df_res_nat, df_eg, df_in = generar_tablas_distribucion(df_rep)
+
+    if not df_in.empty:
+        lineas.append("\n=== DISTRIBUCIÓN PORCENTUAL DE INGRESOS POR 'Mayor - Descripción' ===")
+        for _, r in df_in.iterrows():
+            if r["Naturaleza Contable"] == "TOTAL":
+                continue
             lineas.append(
-                f"  - Fecha: {r['Mayor - Fecha']} | Mayor - Descripción: '{r['Mayor - Descripción']}' | "
-                f"Ref: {r['Mayor - Referencia']} | Monto VES: {r['Mayor - Monto']:,.2f} | "
-                f"USD: {r['Monto Convertido USD']:,.2f} | Estado: {r['Marca Conciliación']}"
+                f"  * '{r['Mayor - Descripción']}' | Tipo: {r['Naturaleza Contable']} | "
+                f"Movimientos: {int(r['Movimientos'])} | Monto VES: {r['Monto_Total_VES']:,.2f} | "
+                f"USD: {r['Monto_Total_USD']:,.2f} | % s/ Total Entradas: {r['% s/ Total Ingresos General']:.2f}% | "
+                f"% s/ Ventas Clientes: {r['% s/ Ingresos por Ventas (Clientes)']:.2f}%"
             )
 
-    # Detalle de Partidas Pendientes (Banco y Libros)
-    df_pend = df_rep[df_rep["Marca Conciliación"].isin(["Por conciliar (Banco)", "Por conciliar (Libros)"])]
-    if not df_pend.empty:
-        lineas.append("\n=== DETALLE DE PARTIDAS PENDIENTES REALES (POR CONCILIAR) ===")
-        for _, r in df_pend.head(60).iterrows():
-            if r["Marca Conciliación"] == "Por conciliar (Banco)":
-                lineas.append(
-                    f"  - [PENDIENTE BANCO] Fecha: {r['Banco - Fecha']} | Banco - Descripción: '{r['Banco - Descripción']}' | "
-                    f"Ref: {r['Banco - Referencia']} | Monto VES: {r['Banco - Monto']:,.2f} | USD: {r['Monto Convertido USD']:,.2f}"
-                )
-            else:
-                lineas.append(
-                    f"  - [PENDIENTE LIBROS] Fecha: {r['Mayor - Fecha']} | Mayor - Descripción: '{r['Mayor - Descripción']}' | "
-                    f"Ref: {r['Mayor - Referencia']} | Monto VES: {r['Mayor - Monto']:,.2f} | USD: {r['Monto Convertido USD']:,.2f}"
-                )
+    if not df_eg.empty:
+        lineas.append("\n=== DISTRIBUCIÓN PORCENTUAL DE EGRESOS POR 'Mayor - Descripción' ===")
+        for _, r in df_eg.iterrows():
+            if r["Naturaleza Contable"] == "TOTAL":
+                continue
+            lineas.append(
+                f"  * '{r['Mayor - Descripción']}' | Tipo: {r['Naturaleza Contable']} | "
+                f"Movimientos: {int(r['Movimientos'])} | Monto VES: {r['Monto_Total_VES']:,.2f} | "
+                f"USD: {r['Monto_Total_USD']:,.2f} | % s/ Total Egresos: {r['% sobre Total Egresos']:.2f}%"
+            )
 
     return "\n".join(lineas)
 
 
-# Estilos CSS profesionales inspirados en la interfaz de referencia
+# Estilos CSS profesionales
 st.markdown(
     """
     <style>
@@ -299,7 +712,7 @@ st.markdown(
 )
 
 # =============================================================================
-# 2. GESTIÓN DE ESTADO Y SEGURIDAD (AUTENTICACIÓN)
+# 4. GESTIÓN DE ESTADO Y SEGURIDAD (AUTENTICACIÓN)
 # =============================================================================
 if "autenticado" not in st.session_state:
     st.session_state.autenticado = False
@@ -319,7 +732,6 @@ if not st.session_state.autenticado:
             st.error("Contraseña incorrecta. Intente nuevamente.")
     st.stop()
 
-# Inicialización de Estados Globales del Sistema
 if "tabla_tasas" not in st.session_state:
     st.session_state.tabla_tasas = TablaTasas(max_antiguedad_dias=7)
 
@@ -346,7 +758,7 @@ if "ultima_pregunta_ia" not in st.session_state:
 
 
 # =============================================================================
-# 3. BARRA LATERAL DE NAVEGACIÓN
+# 5. BARRA LATERAL DE NAVEGACIÓN
 # =============================================================================
 with st.sidebar:
     st.markdown("### 📊 Conciliacion")
@@ -393,10 +805,9 @@ with st.sidebar:
 
 
 # =============================================================================
-# 4. MÓDULOS Y VISTAS DE LA APLICACIÓN
+# 6. MÓDULOS Y VISTAS DE LA APLICACIÓN
 # =============================================================================
 
-# --- VISTA: GESTIÓN DE TASAS BCV ---
 if modulo_analisis == "Gestión de Tasas BCV / Multidivisa":
     st.title("💱 Tasas de Cambio BCV y Conversión Multidivisa")
     st.markdown("Cargue masivamente las tasas oficiales desde Excel y realice conversiones seguras.")
@@ -431,7 +842,6 @@ if modulo_analisis == "Gestión de Tasas BCV / Multidivisa":
         except Exception as ex:
             st.error(f"Error al leer el archivo de tasas: {ex}")
 
-# --- VISTA: BANCOS Y CUENTAS (MAESTROS) ---
 elif modulo_maestros == "Bancos y Cuentas":
     st.title("🏦 Maestros: Bancos y Cuentas")
     st.markdown("Gestión de cuentas bancarias corporativas agrupadas por institución.")
@@ -464,7 +874,6 @@ elif modulo_maestros == "Bancos y Cuentas":
         for c in ctas:
             st.info(f"Número: {c}")
 
-# --- VISTA: DASHBOARD PRINCIPAL ---
 elif menu_proceso == "Dashboard":
     st.title("Dashboard")
     st.markdown(
@@ -530,7 +939,6 @@ elif menu_proceso == "Dashboard":
                 pass
             st.markdown("</div>", unsafe_allow_html=True)
 
-# --- VISTA: IMPORTAR ARCHIVOS ---
 elif menu_proceso == "Importar":
     st.title("📂 Importar Extractos y Registros Contables")
     st.markdown("Cargue archivos en formato Excel o CSV para procesar los movimientos automáticamente.")
@@ -592,7 +1000,6 @@ elif menu_proceso == "Importar":
         except Exception as err:
             st.error(f"Error al procesar el archivo cargado: {err}")
 
-# --- VISTA: REGLAS DEL MOTOR ---
 elif menu_proceso == "Reglas":
     st.title("📋 Configuración y Criterios del Motor de Conciliación")
     st.markdown("Detalle automatizado de las reglas contables y de cruce aplicadas por el sistema en Venezuela.")
@@ -602,23 +1009,19 @@ elif menu_proceso == "Reglas":
     * **Condición:** Antes de cruzar nada con el banco, el motor escanea el mayor contable buscando parejas de movimientos con montos exactos de signo opuesto ($+X$ y $-X$) que compartan la misma referencia (`Nº documento`) y descripción/contrapartida.
     * **Propósito:** Neutralizar las anulaciones internas desde la raíz para que **nunca consuman movimientos bancarios reales** ni inflen los pendientes. Quedan etiquetadas como **`Asiento Anulado`**.
 
-    ### 2. Cruce Exacto (Regla C1)
-    * **Condición:** Coincidencia exacta de referencia, monto idéntico (mismo signo) y misma fecha.
-    * **Propósito:** Cierre automático de alta confianza para transacciones directas.
+    ### 2. Clasificación Automática de Naturaleza Contable (Cuentas Propias vs Operativo Real)
+    * **Transferencias entre Cuentas Propias (Fondeos):** Identifica traslados entre bancos de la empresa (`BANCO BANESCO`, `BNC`, `MERCANTIL`, etc.) para no confundirlos con ingresos por ventas.
+    * **Ingresos por Ventas / Cobranzas de Clientes:** Entradas provenientes de clientes y distribuidoras comerciales.
+    * **Ingresos Bancarios / Intereses y Devoluciones:** Distingue abonos por intereses bancarios y reintegros o devoluciones de proveedores por errores de pago.
 
-    ### 3. Tolerancia de Fechas (Regla C2)
-    * **Condición:** Mismo monto y signo, permitiendo una diferencia de días entre la fecha del banco y la fecha contable dentro del rango configurado (por defecto 3 días).
-    * **Propósito:** Conciliar operaciones que cruzan fines de semana o días hábiles bancarios diferidos.
-
-    ### 4. Sugerencias Inteligentes (Reglas C3 / C4)
-    * **C3 (Aproximadas):** Cruces con pequeñas diferencias de monto o descripciones similares.
-    * **C4 (Agrupadas):** Conciliación de múltiples partidas contables que suman exactamente el valor de un movimiento bancario (o viceversa).
+    ### 3. Cruce Exacto (Regla C1) y Tolerancia de Fechas (Regla C2)
+    * **C1:** Coincidencia exacta de referencia, monto idéntico y fecha.
+    * **C2:** Mismo monto y signo dentro de la ventana de días hábiles configurada.
     """)
 
-# --- VISTA: MOTOR DE CONCILIACIÓN CON EXCEL COMPLETO & ASISTENTE IA ---
 elif menu_proceso == "Conciliación":
-    st.title("⚡ Motor de Cruce y Propuestas Automáticas")
-    st.markdown("Cruce inteligente de partidas aplicando las reglas del motor (C1, C2, C3, C4) con aislamiento previo de anulados.")
+    st.title("⚡ Motor de Cruce, Distribución Porcentual y Asistente IA")
+    st.markdown("Cruce inteligente con aislamiento de anulados, peso porcentual por partida y distinción de cuentas propias.")
 
     st.info(
         f"📊 Movimientos cargados en memoria — Banco: {len(st.session_state.movs_banco)} | Libros: {len(st.session_state.movs_libros)}"
@@ -642,11 +1045,11 @@ elif menu_proceso == "Conciliación":
             except Exception as e:
                 st.error(f"Error durante la ejecución del motor: {e}")
 
-    # Mostrar resultados y opciones avanzadas si ya fueron calculados
     if st.session_state.resultado_conciliacion:
         res = st.session_state.resultado_conciliacion
         datos_resumen = res.resumen()
         df_reporte_actual = construir_dataframe_consolidado(res, st.session_state.tabla_tasas)
+        df_res_nat, df_dist_egresos, df_dist_ingresos = generar_tablas_distribucion(df_reporte_actual)
 
         st.markdown("---")
         st.subheader("📈 Resultados del Cruce")
@@ -658,7 +1061,6 @@ elif menu_proceso == "Conciliación":
         kpi4.metric("Libros Pendiente", datos_resumen.get("libros_pendiente", 0))
         kpi5.metric("Asientos Anulados", datos_resumen.get("libros_anulados", 0))
 
-        # Botón para guardar permanentemente en el historial
         if st.button("💾 Guardar Conciliación Actual en Historial"):
             registro_historial = {
                 "fecha_cierre": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -671,40 +1073,127 @@ elif menu_proceso == "Conciliación":
             st.success("¡Conciliación guardada permanentemente en el Historial del sistema!")
 
         # =====================================================================
-        # EXPORTAR REPORTE CONSOLIDADO EN EXCEL (INCLUYE HOJA DE ANÁLISIS IA SI EXISTE)
+        # EXPORTAR REPORTE CONSOLIDADO EN EXCEL (CON % POR PARTIDA Y PESTAÑAS TOP)
         # =====================================================================
         st.markdown("---")
-        st.subheader("📥 Exportar Reporte Consolidado")
+        st.subheader("📥 Exportar Reporte Consolidado + Distribución Porcentual en Excel")
+        st.caption(
+            "Incluye en el mismo Excel: 1) Conciliación Consolidada con el % de cada partida sobre el Total de Ingresos y Egresos, "
+            "2) Resumen por Naturaleza Contable (Cuentas Propias vs Ventas), 3) Top Distribución Egresos y 4) Top Distribución Ingresos."
+        )
+
+        # Agregar fila final de Totales a una copia de la hoja principal para el Excel
+        df_hoja_principal = df_reporte_actual.copy()
+        if not df_hoja_principal.empty:
+            mask_no_anul = df_hoja_principal["Marca Conciliación"] != "Asiento Anulado"
+            tot_ing_m = df_hoja_principal.loc[mask_no_anul & (df_hoja_principal["Mayor - Monto"] > 0), "Mayor - Monto"].sum()
+            tot_egr_m = df_hoja_principal.loc[mask_no_anul & (df_hoja_principal["Mayor - Monto"] < 0), "Mayor - Monto"].sum()
+            tot_net_m = tot_ing_m + tot_egr_m
+            tot_bco_m = df_hoja_principal["Banco - Monto"].sum()
+            tot_usd_m = df_hoja_principal.loc[mask_no_anul, "Monto Convertido USD"].sum()
+
+            filas_totales = pd.DataFrame([
+                {
+                    "Banco - Fecha": "",
+                    "Banco - Descripción": "TOTAL INGRESOS MAYOR (SIN ANULADOS)",
+                    "Banco - Referencia": "",
+                    "Banco - Monto": 0.0,
+                    "Mayor - Fecha": "",
+                    "Mayor - Descripción": "TOTAL INGRESOS MAYOR",
+                    "Mayor - Referencia": "",
+                    "Mayor - Monto": round(tot_ing_m, 2),
+                    "Marca Conciliación": "TOTAL INGRESOS",
+                    "Naturaleza Contable": "Total Entradas Mayor",
+                    "Tasa BCV USD": 0.0,
+                    "Monto Convertido USD": 0.0,
+                    "% s/ Total Ingresos Mayor": 100.0 if tot_ing_m > 0 else 0.0,
+                    "% s/ Total Egresos Mayor": 0.0,
+                },
+                {
+                    "Banco - Fecha": "",
+                    "Banco - Descripción": "TOTAL EGRESOS MAYOR (SIN ANULADOS)",
+                    "Banco - Referencia": "",
+                    "Banco - Monto": 0.0,
+                    "Mayor - Fecha": "",
+                    "Mayor - Descripción": "TOTAL EGRESOS MAYOR",
+                    "Mayor - Referencia": "",
+                    "Mayor - Monto": round(tot_egr_m, 2),
+                    "Marca Conciliación": "TOTAL EGRESOS",
+                    "Naturaleza Contable": "Total Salidas Mayor",
+                    "Tasa BCV USD": 0.0,
+                    "Monto Convertido USD": 0.0,
+                    "% s/ Total Ingresos Mayor": 0.0,
+                    "% s/ Total Egresos Mayor": 100.0 if tot_egr_m < 0 else 0.0,
+                },
+                {
+                    "Banco - Fecha": "",
+                    "Banco - Descripción": "FLUJO NETO / SALDO MAYOR (INGRESOS - EGRESOS)",
+                    "Banco - Referencia": "",
+                    "Banco - Monto": round(tot_bco_m, 2),
+                    "Mayor - Fecha": "",
+                    "Mayor - Descripción": "FLUJO NETO MAYOR",
+                    "Mayor - Referencia": "",
+                    "Mayor - Monto": round(tot_net_m, 2),
+                    "Marca Conciliación": "FLUJO NETO",
+                    "Naturaleza Contable": "Resultado Neto Periodo",
+                    "Tasa BCV USD": 0.0,
+                    "Monto Convertido USD": round(tot_usd_m, 2),
+                    "% s/ Total Ingresos Mayor": 0.0,
+                    "% s/ Total Egresos Mayor": 0.0,
+                },
+            ])
+            df_hoja_principal = pd.concat([df_hoja_principal, filas_totales], ignore_index=True)
 
         output_excel = io.BytesIO()
         with pd.ExcelWriter(output_excel, engine="openpyxl") as writer:
-            df_reporte_actual.to_excel(writer, index=False, sheet_name="Conciliacion_Consolidada")
+            df_hoja_principal.to_excel(writer, index=False, sheet_name="Conciliacion_Consolidada")
+            if not df_res_nat.empty:
+                df_res_nat.to_excel(writer, index=False, sheet_name="Resumen_Naturaleza")
+            if not df_dist_ingresos.empty:
+                df_dist_ingresos.to_excel(writer, index=False, sheet_name="Top_Distribucion_Ingresos")
+            if not df_dist_egresos.empty:
+                df_dist_egresos.to_excel(writer, index=False, sheet_name="Top_Distribucion_Egresos")
             if st.session_state.ultimo_analisis_ia:
                 df_ia_hoja = pd.DataFrame([
-                    {"Consulta Realizada": st.session_state.ultima_pregunta_ia, "Análisis del Asistente IA": st.session_state.ultimo_analisis_ia}
+                    {
+                        "Consulta Realizada": st.session_state.ultima_pregunta_ia,
+                        "Análisis del Asistente IA": st.session_state.ultimo_analisis_ia,
+                    }
                 ])
                 df_ia_hoja.to_excel(writer, index=False, sheet_name="Analisis_IA")
         processed_data = output_excel.getvalue()
 
         st.download_button(
-            label="📥 Descargar Reporte Completo en Excel (.xlsx)",
+            label="📥 Descargar Reporte Consolidado + Distribución % en Excel (.xlsx)",
             data=processed_data,
             file_name="Reporte_Conciliacion_Consolidado.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 
+        # Vista previa interactiva de las tablas de distribución porcentual
+        with st.expander("📊 Ver Tablas de Distribución Porcentual (Ingresos vs Cuentas Propias y Egresos)", expanded=False):
+            st.markdown("#### 1. Resumen por Naturaleza Contable")
+            st.dataframe(df_res_nat, use_container_width=True)
+            col_ti, col_te = st.columns(2)
+            with col_ti:
+                st.markdown("#### 2. Distribución % de Ingresos (Mayor)")
+                st.dataframe(df_dist_ingresos, use_container_width=True)
+            with col_te:
+                st.markdown("#### 3. Distribución % de Egresos (Mayor)")
+                st.dataframe(df_dist_egresos, use_container_width=True)
+
         # =====================================================================
-        # ASISTENTE DE IA INTEGRADO CON DATOS REALES DEL MAYOR Y BANCO + DESCARGA
+        # ASISTENTE DE IA INTEGRADO + DESCARGA EN WORD (.DOCX) Y EXCEL (.XLSX)
         # =====================================================================
         st.markdown("---")
-        with st.expander("🤖 Asistente IA para Análisis de Conciliación (Datos Reales del Mayor y Banco)", expanded=True):
+        with st.expander("🤖 Asistente IA para Análisis de Conciliación (Descargable en Word y Excel)", expanded=True):
             st.markdown(
-                "Realice preguntas sobre el **Top de movimientos mayores**, distribución porcentual por **`Mayor - Descripción`**, "
-                "o partidas pendientes. El asistente responde **exclusivamente con los escritos y montos reales de sus archivos**."
+                "Realice preguntas sobre el **Top de movimientos mayores**, **distribución porcentual** "
+                "o **análisis de ingresos reales vs transferencias entre cuentas propias**."
             )
             pregunta_ai = st.text_input(
                 "Consulta para el Asistente IA:",
-                placeholder="Ejemplo: Muéstrame el top de egresos y su distribución porcentual usando el escrito exacto de Mayor - Descripción",
+                placeholder="Ejemplo: Dame un análisis general con el Top 10 de egresos e ingresos, separando transferencias entre cuentas propias de las cobranzas a clientes",
             )
 
             if st.button("Consultar Asistente IA", type="primary"):
@@ -723,13 +1212,16 @@ elif menu_proceso == "Conciliación":
 
                             prompt_sistema = (
                                 "Eres un auditor financiero y analista de tesorería experto en Venezuela. "
-                                "REGLA ESTRICTA E INQUEBRANTABLE: "
-                                "1) Está PROHIBIDO inventar categorías genéricas (como 'Sueldos y salarios', 'Compras de inventario', 'Servicios públicos', 'Alquiler', 'Publicidad', etc.) "
-                                "o inventar montos hipotéticos que no estén en el contexto. "
-                                "2) Cuando el usuario pida el Top de movimientos, distribución porcentual de egresos/ingresos o análisis por concepto del Mayor, "
-                                "debes usar ÚNICAMENTE y LITERALMENTE el texto exacto del campo 'Mayor - Descripción' (por ejemplo: 'BANCO BANESCO', 'AGROINSUMOS PANAMERICANO,C.A.', "
-                                "'ANTICIPO DE GASTOS REPRESENTANTES DE VENTAS', 'TELEFONICA VENEZOLANA,C.A', 'INTERESES BANCARIOS', etc.) y los montos exactos provistos en el contexto. "
-                                "3) Excluye siempre los 'Asiento Anulado' de los totales operativos salvo que el usuario pregunte específicamente por los anulados."
+                                "REGLAS ESTRICTAS E INQUEBRANTABLES: "
+                                "1) Usa ÚNICAMENTE los textos literales exactos de 'Mayor - Descripción' y los montos reales provistos. Prohibido inventar categorías o cifras. "
+                                "2) DISTINCIÓN CONTABLE CRÍTICA EN INGRESOS: Cuando en 'Mayor - Descripción' aparezca el nombre de un banco "
+                                "(ej. 'BANCO BANESCO', 'BANCO NACIONAL DE CREDITO-395', etc.), NO es una venta ni un cliente: es una "
+                                "'Transferencia entre Cuentas Propias / Fondeo Interno'. Por lo tanto, al analizar los ingresos, presenta siempre por separado: "
+                                "a) Las Transferencias entre Cuentas Propias (fondeos bancarios), "
+                                "b) Los Ingresos Reales por Ventas / Cobranzas a Clientes (ej. Inversiones Vetglobal, Agrodistribuidora, etc., indicando tanto su % sobre el total de entradas como su % sobre las ventas a clientes), "
+                                "c) Los Ingresos Bancarios / Intereses (ej. 'INTERESES BANCARIOS') y posibles Devoluciones/Reintegros de proveedores. "
+                                "Nunca recomiendes 'diversificar ingresos porque dependen de Banco Banesco', sino explica que 'BANCO BANESCO' corresponde a fondeos o traslados internos entre cuentas propias. "
+                                "3) En las tablas Markdown que generes, incluye siempre Monto en VES, Monto en USD (si aplica) y el Porcentaje (%)."
                             )
 
                             response = client.chat.completions.create(
@@ -749,51 +1241,60 @@ elif menu_proceso == "Conciliación":
                         except Exception as ai_err:
                             st.error(f"Error al conectar con la API (Verifique su API Key y base_url en st.secrets): {ai_err}")
 
-            # Mostrar último análisis generado y botones de descarga directa
             if st.session_state.ultimo_analisis_ia:
                 st.markdown("#### 📄 Resultado del Análisis IA")
                 st.markdown(st.session_state.ultimo_analisis_ia)
 
-                col_d1, col_d2 = st.columns(2)
-                with col_d1:
+                # Preparar archivo Word (.docx) nativo con formato ejecutivo y tablas
+                bytes_docx = generar_word_analisis_ia(
+                    st.session_state.ultima_pregunta_ia,
+                    st.session_state.ultimo_analisis_ia,
+                    df_res_nat,
+                    df_dist_egresos,
+                    df_dist_ingresos,
+                )
+
+                # Preparar archivo Excel (.xlsx) con el análisis y todas las tablas numéricas de distribución
+                out_ia_xlsx = io.BytesIO()
+                with pd.ExcelWriter(out_ia_xlsx, engine="openpyxl") as writer_ia:
+                    if not df_res_nat.empty:
+                        df_res_nat.to_excel(writer_ia, index=False, sheet_name="Resumen_Naturaleza")
+                    if not df_dist_ingresos.empty:
+                        df_dist_ingresos.to_excel(writer_ia, index=False, sheet_name="Top_Ingresos_Porcentaje")
+                    if not df_dist_egresos.empty:
+                        df_dist_egresos.to_excel(writer_ia, index=False, sheet_name="Top_Egresos_Porcentaje")
+                    pd.DataFrame([
+                        {
+                            "Fecha": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                            "Consulta": st.session_state.ultima_pregunta_ia,
+                            "Respuesta IA": st.session_state.ultimo_analisis_ia,
+                        }
+                    ]).to_excel(writer_ia, index=False, sheet_name="Texto_Analisis_IA")
+
+                col_w, col_x, col_m = st.columns(3)
+                with col_w:
                     st.download_button(
-                        label="📥 Descargar Análisis IA (.txt / .md)",
+                        label="📝 Descargar Resumen IA en Word (.docx)",
+                        data=bytes_docx,
+                        file_name="Resumen_Ejecutivo_IA_Conciliacion.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        use_container_width=True,
+                    )
+                with col_x:
+                    st.download_button(
+                        label="📊 Descargar Tablas Top y % en Excel (.xlsx)",
+                        data=out_ia_xlsx.getvalue(),
+                        file_name="Distribucion_Porcentual_y_Top_IA.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True,
+                    )
+                with col_m:
+                    st.download_button(
+                        label="📄 Descargar Texto (.md)",
                         data=st.session_state.ultimo_analisis_ia.encode("utf-8"),
                         file_name="Analisis_IA_Conciliacion.md",
                         mime="text/markdown",
-                    )
-                with col_d2:
-                    # Generar Excel con el resumen real por Mayor - Descripción + el texto del análisis IA
-                    out_ia_xlsx = io.BytesIO()
-                    df_mayor_real = df_reporte_actual[
-                        (df_reporte_actual["Mayor - Descripción"].astype(str).str.strip() != "")
-                        & (df_reporte_actual["Marca Conciliación"] != "Asiento Anulado")
-                    ].copy()
-                    with pd.ExcelWriter(out_ia_xlsx, engine="openpyxl") as writer_ia:
-                        pd.DataFrame([
-                            {
-                                "Fecha": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                                "Consulta": st.session_state.ultima_pregunta_ia,
-                                "Respuesta IA": st.session_state.ultimo_analisis_ia,
-                            }
-                        ]).to_excel(writer_ia, index=False, sheet_name="Analisis_IA")
-                        if not df_mayor_real.empty:
-                            resumen_conceptos = (
-                                df_mayor_real.groupby(["Mayor - Descripción", "Marca Conciliación"], as_index=False)
-                                .agg(
-                                    Cantidad_Movimientos=("Mayor - Monto", "count"),
-                                    Total_VES=("Mayor - Monto", "sum"),
-                                    Total_USD=("Monto Convertido USD", "sum"),
-                                )
-                                .sort_values("Total_VES", ascending=True)
-                            )
-                            resumen_conceptos.to_excel(writer_ia, index=False, sheet_name="Resumen_Mayor_Real")
-
-                    st.download_button(
-                        label="📊 Descargar Análisis IA y Resumen Mayor en Excel (.xlsx)",
-                        data=out_ia_xlsx.getvalue(),
-                        file_name="Analisis_IA_Mayor_Real.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True,
                     )
 
         if res.sugerencias:
