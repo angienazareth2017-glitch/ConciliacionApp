@@ -43,7 +43,7 @@ except ImportError:
 # 1. CONFIGURACIÓN INICIAL DE LA PÁGINA Y PERSISTENCIA COMPLETA
 # =============================================================================
 st.set_page_config(
-    page_title="Tesora Pro - Sistema de Conciliación y Tesorería",
+    page_title="TESORIQ | Inteligencia Financiera",
     page_icon="📊",
     layout="wide",
 )
@@ -632,7 +632,7 @@ def generar_word_analisis_ia(pregunta: str, respuesta_md: str, df_res_nat: pd.Da
         xml_t.append("</w:tbl>")
         return "".join(xml_t)
 
-    parrafos_xml.append(_p_titulo("Tesora Pro — Informe Ejecutivo de Conciliación y Tesorería (IA)", 1))
+    parrafos_xml.append(_p_titulo("TESORIQ — Informe Ejecutivo de Conciliación y Tesorería (IA)", 1))
     parrafos_xml.append(_p_texto(f"Fecha de emisión: {datetime.now().strftime('%Y-%m-%d %H:%M')}", negrita=True))
     if pregunta:
         parrafos_xml.append(_p_texto(f"Consulta analizada: {pregunta}", negrita=True))
@@ -830,34 +830,34 @@ def construir_contexto_ia_real(df_rep: pd.DataFrame, res) -> str:
     return "\n".join(lineas)
 
 
-# Estilos CSS de Alto Contraste: Azul Oscuro (#0A1E46), Blanco (#FFFFFF) y Negro (#0B0F19) + Tipografía Ampliada
+# Estilos CSS de Alto Contraste: Verde Bosque (#10251D), Blanco (#FFFFFF) y Negro (#171A18) + Tipografía Ampliada
 st.markdown(
     """
     <style>
         /* Fondo general claro y texto negro nítido */
         .stApp {
-            background-color: #F8FAFC;
-            color: #0B0F19;
+            background-color: #F4F6F4;
+            color: #171A18;
         }
 
-        /* Títulos de sección en Azul Oscuro y Negro con tamaño apropiado */
+        /* Títulos de sección en Verde Bosque y Negro con tamaño apropiado */
         h1 {
-            color: #0A1E46 !important;
+            color: #10251D !important;
             font-size: 32px !important;
             font-weight: 800 !important;
         }
         h2 {
-            color: #0A1E46 !important;
+            color: #10251D !important;
             font-size: 25px !important;
             font-weight: 700 !important;
         }
         h3 {
-            color: #0B0F19 !important;
+            color: #171A18 !important;
             font-size: 21px !important;
             font-weight: 700 !important;
         }
         h4 {
-            color: #0A1E46 !important;
+            color: #10251D !important;
             font-size: 18px !important;
             font-weight: 700 !important;
         }
@@ -867,7 +867,7 @@ st.markdown(
             background-color: #FFFFFF;
             border-radius: 12px;
             border: 1.5px solid #CBD5E1;
-            box-shadow: 0 4px 12px rgba(10, 30, 70, 0.06);
+            box-shadow: 0 4px 12px rgba(16, 37, 29, 0.06);
             padding: 18px;
             margin-bottom: 14px;
         }
@@ -880,19 +880,19 @@ st.markdown(
         section[data-testid="stSidebar"] .stRadio label p {
             font-size: 16px !important;
             font-weight: 600 !important;
-            color: #0B0F19 !important;
+            color: #171A18 !important;
         }
 
-        /* Botones principales y secundarios en Azul Oscuro */
+        /* Botones principales y secundarios en Verde Bosque */
         .stButton button[kind="primary"] {
-            background-color: #0A1E46 !important;
+            background-color: #10251D !important;
             color: #FFFFFF !important;
-            border: 1.5px solid #0A1E46 !important;
+            border: 1.5px solid #10251D !important;
             border-radius: 10px !important;
             font-size: 16px !important;
             font-weight: 700 !important;
             padding: 0.55rem 1.2rem !important;
-            box-shadow: 0 2px 6px rgba(10, 30, 70, 0.25);
+            box-shadow: 0 2px 6px rgba(16, 37, 29, 0.20);
         }
         .stButton button[kind="primary"] p,
         .stButton button[kind="primary"] span {
@@ -901,13 +901,13 @@ st.markdown(
             font-weight: 700 !important;
         }
         .stButton button[kind="primary"]:hover {
-            background-color: #15357A !important;
-            border-color: #15357A !important;
+            background-color: #238458 !important;
+            border-color: #238458 !important;
         }
         .stButton button[kind="secondary"] {
             background-color: #FFFFFF !important;
-            color: #0A1E46 !important;
-            border: 1.5px solid #0A1E46 !important;
+            color: #10251D !important;
+            border: 1.5px solid #10251D !important;
             border-radius: 10px !important;
             font-size: 15px !important;
             font-weight: 700 !important;
@@ -915,17 +915,17 @@ st.markdown(
         }
         .stButton button[kind="secondary"] p,
         .stButton button[kind="secondary"] span {
-            color: #0A1E46 !important;
+            color: #10251D !important;
             font-size: 15px !important;
             font-weight: 700 !important;
         }
         .stButton button[kind="secondary"]:hover {
-            background-color: #EFF6FF !important;
+            background-color: #E8F5EE !important;
         }
 
-        /* Botones de descarga en Azul Oscuro */
+        /* Botones de descarga en Verde Bosque */
         .stDownloadButton button {
-            background-color: #0A1E46 !important;
+            background-color: #10251D !important;
             color: #FFFFFF !important;
             border-radius: 10px !important;
             font-size: 15px !important;
@@ -939,17 +939,17 @@ st.markdown(
             font-weight: 700 !important;
         }
 
-        /* Banner Superior Azul Oscuro Corporativo */
-        .tesora-banner {
-            background: linear-gradient(135deg, #071636 0%, #0F2C67 60%, #153E85 100%);
+        /* Banner Superior Verde Bosque Corporativo */
+        .tesoriq-banner {
+            background: linear-gradient(135deg, #10251D 0%, #174A35 60%, #238458 100%);
             padding: 28px 32px;
             border-radius: 14px;
             margin-bottom: 24px;
-            box-shadow: 0 8px 22px rgba(7, 22, 54, 0.22);
-            border-left: 6px solid #38BDF8;
+            box-shadow: 0 8px 22px rgba(16, 37, 29, 0.22);
+            border-left: 6px solid #8CE0B5;
         }
-        .tesora-banner .tesora-banner-title,
-        .tesora-banner .tesora-banner-title * {
+        .tesoriq-banner .tesoriq-banner-title,
+        .tesoriq-banner .tesoriq-banner-title * {
             color: #FFFFFF !important;
             font-size: 32px !important;
             font-weight: 800 !important;
@@ -958,9 +958,9 @@ st.markdown(
             display: block;
             text-shadow: 0 2px 4px rgba(0, 0, 0, 0.25);
         }
-        .tesora-banner .tesora-banner-sub,
-        .tesora-banner .tesora-banner-sub * {
-            color: #E0F2FE !important;
+        .tesoriq-banner .tesoriq-banner-sub,
+        .tesoriq-banner .tesoriq-banner-sub * {
+            color: #DDF5E8 !important;
             font-size: 18px !important;
             font-weight: 500 !important;
             line-height: 1.45 !important;
@@ -969,17 +969,17 @@ st.markdown(
         }
 
         /* Tarjetas de Indicadores (Recuadros KPI) con fuente grande y clara */
-        .tesora-kpi-card {
+        .tesoriq-kpi-card {
             background-color: #FFFFFF;
             border: 1.5px solid #CBD5E1;
-            border-top: 5px solid #0A1E46;
+            border-top: 5px solid #10251D;
             border-radius: 12px;
             padding: 20px 22px;
-            box-shadow: 0 4px 12px rgba(10, 30, 70, 0.06);
+            box-shadow: 0 4px 12px rgba(16, 37, 29, 0.06);
             margin-bottom: 16px;
         }
-        .tesora-kpi-card .tesora-kpi-label,
-        .tesora-kpi-card .tesora-kpi-label * {
+        .tesoriq-kpi-card .tesoriq-kpi-label,
+        .tesoriq-kpi-card .tesoriq-kpi-label * {
             color: #1E293B !important;
             font-size: 17px !important;
             font-weight: 700 !important;
@@ -987,9 +987,9 @@ st.markdown(
             line-height: 1.35 !important;
             display: block;
         }
-        .tesora-kpi-card .tesora-kpi-value,
-        .tesora-kpi-card .tesora-kpi-value * {
-            color: #0A1E46 !important;
+        .tesoriq-kpi-card .tesoriq-kpi-value,
+        .tesoriq-kpi-card .tesoriq-kpi-value * {
+            color: #10251D !important;
             font-size: 38px !important;
             font-weight: 800 !important;
             line-height: 1.1 !important;
@@ -1000,32 +1000,32 @@ st.markdown(
         div[data-testid="stMetricValue"],
         div[data-testid="stMetricValue"] > div,
         div[data-testid="stMetricValue"] p {
-            color: #0A1E46 !important;
+            color: #10251D !important;
             font-size: 36px !important;
             font-weight: 800 !important;
         }
         div[data-testid="stMetricLabel"] p,
         div[data-testid="stMetricLabel"] label {
-            color: #0B0F19 !important;
+            color: #171A18 !important;
             font-size: 17px !important;
             font-weight: 700 !important;
         }
 
-        @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,600;0,700;1,400;1,600&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&display=swap');
 
-        /* Insignia Elegante y Femenina Tesora Pro en la barra lateral */
+        /* Identidad visual corporativa TESORIQ en la barra lateral */
         .sidebar-brand {
-            background: linear-gradient(135deg, #09193A 0%, #132B5E 55%, #1E3F7F 100%);
+            background: linear-gradient(135deg, #10251D 0%, #174A35 55%, #238458 100%);
             padding: 20px 16px;
             border-radius: 18px;
             margin-bottom: 18px;
-            box-shadow: 0 8px 22px rgba(9, 25, 58, 0.22);
-            border: 1px solid rgba(243, 198, 182, 0.45);
-            border-left: 5px solid #E8B4B8;
+            box-shadow: 0 8px 22px rgba(16, 37, 29, 0.22);
+            border: 1px solid rgba(140, 224, 181, 0.35);
+            border-left: 5px solid #238458;
         }
         .sidebar-section-label {
             font-size: 13px !important;
-            color: #0A1E46 !important;
+            color: #10251D !important;
             font-weight: 800 !important;
             letter-spacing: 0.8px;
             text-transform: uppercase;
@@ -1038,11 +1038,11 @@ st.markdown(
 
 
 def render_banner(titulo: str, subtitulo: str) -> None:
-    """Renderiza un banner institucional en Azul Oscuro con título blanco de 32px y subtítulo de 18px."""
+    """Renderiza un banner institucional en Verde Bosque con título blanco de 32px y subtítulo de 18px."""
     html_banner = (
-        f'<div class="tesora-banner">'
-        f'<div class="tesora-banner-title" style="color:#FFFFFF; font-size:32px; font-weight:800; margin-bottom:8px;">{titulo}</div>'
-        f'<div class="tesora-banner-sub" style="color:#E0F2FE; font-size:18px; font-weight:500;">{subtitulo}</div>'
+        f'<div class="tesoriq-banner">'
+        f'<div class="tesoriq-banner-title" style="color:#FFFFFF; font-size:32px; font-weight:800; margin-bottom:8px;">{titulo}</div>'
+        f'<div class="tesoriq-banner-sub" style="color:#DDF5E8; font-size:18px; font-weight:500;">{subtitulo}</div>'
         f'</div>'
     )
     st.markdown(html_banner, unsafe_allow_html=True)
@@ -1051,9 +1051,9 @@ def render_banner(titulo: str, subtitulo: str) -> None:
 def render_kpi_card(etiqueta: str, valor: object) -> None:
     """Renderiza un recuadro KPI de alto contraste con etiqueta de 17px y número grande de 38px."""
     html_kpi = (
-        f'<div class="tesora-kpi-card">'
-        f'<div class="tesora-kpi-label" style="color:#1E293B; font-size:17px; font-weight:700; margin-bottom:8px;">{etiqueta}</div>'
-        f'<div class="tesora-kpi-value" style="color:#0A1E46; font-size:38px; font-weight:800;">{valor}</div>'
+        f'<div class="tesoriq-kpi-card">'
+        f'<div class="tesoriq-kpi-label" style="color:#1E293B; font-size:17px; font-weight:700; margin-bottom:8px;">{etiqueta}</div>'
+        f'<div class="tesoriq-kpi-value" style="color:#10251D; font-size:38px; font-weight:800;">{valor}</div>'
         f'</div>'
     )
     st.markdown(html_kpi, unsafe_allow_html=True)
@@ -1066,13 +1066,13 @@ if "autenticado" not in st.session_state:
     st.session_state.autenticado = False
 
 if not st.session_state.autenticado:
-    render_banner("✨ Tesora Pro", "Sistema Corporativo de Conciliación Bancaria, Mayor Analítico y Tesorería")
+    render_banner("✨ TESORIQ", "Plataforma de Inteligencia Financiera")
     st.markdown("Por favor, ingrese su contraseña para continuar.")
 
     password_correcta = st.secrets.get("PASSWORD_ACCESO", "admin123")
     password = st.text_input("Contraseña:", type="password")
 
-    if st.button("🔑 Ingresar a Tesora Pro", type="primary"):
+    if st.button("🔑 Ingresar a TESORIQ", type="primary"):
         if password and password == password_correcta:
             st.session_state.autenticado = True
             st.rerun()
@@ -1125,32 +1125,20 @@ if st.session_state.get("_nav_pending"):
 
 
 # =============================================================================
-# 5. BARRA LATERAL DE NAVEGACIÓN CON LOGO VECTORIAL IMPONENTE TESORA PRO
+# 5. BARRA LATERAL DE NAVEGACIÓN CON LOGO VECTORIAL IMPONENTE TESORIQ
 # =============================================================================
 with st.sidebar:
-    # Logo SVG vectorial delicado y femenino (Oro Rosa / Champagne + Serif Elegante + Subtítulo en Cursiva)
+    # Logotipo vectorial TESORIQ: monograma abstracto de tres módulos.
     st.markdown(
         '<div class="sidebar-brand">'
-        '<svg width="100%" height="72" viewBox="0 0 265 72" xmlns="http://www.w3.org/2000/svg">'
-        '<defs>'
-        '<linearGradient id="roseGoldGrad" x1="0%" y1="0%" x2="100%" y2="100%">'
-        '<stop offset="0%" stop-color="#FCE7F3" />'
-        '<stop offset="50%" stop-color="#F5D0C5" />'
-        '<stop offset="100%" stop-color="#E8B4B8" />'
-        '</linearGradient>'
-        '<linearGradient id="iconSoftGrad" x1="0%" y1="0%" x2="100%" y2="100%">'
-        '<stop offset="0%" stop-color="#FFFFFF" />'
-        '<stop offset="100%" stop-color="#FFF1F2" />'
-        '</linearGradient>'
-        '</defs>'
-        '<rect x="2" y="8" width="54" height="54" rx="27" fill="url(#iconSoftGrad)" stroke="#E8B4B8" stroke-width="1.5" />'
-        '<path d="M29 17 C32 26, 36 30, 45 33 C36 36, 32 40, 29 49 C26 40, 22 36, 13 33 C22 30, 26 26, 29 17 Z" fill="#0F295E" />'
-        '<path d="M29 22 C31 28, 33 30, 39 33 C33 36, 31 38, 29 44 C27 38, 25 36, 19 33 C25 30, 27 28, 29 22 Z" fill="#E8B4B8" />'
-        '<circle cx="42" cy="21" r="2.2" fill="#E8B4B8" />'
-        '<text x="68" y="36" fill="#FFFFFF" font-family="Playfair Display, Georgia, Times New Roman, serif" font-size="28" font-weight="700" letter-spacing="0.4">Tesora</text>'
-        '<rect x="166" y="16" width="48" height="24" rx="12" fill="url(#roseGoldGrad)" />'
-        '<text x="190" y="33" fill="#09193A" font-family="Playfair Display, Georgia, serif" font-size="14.5" font-weight="700" font-style="italic" text-anchor="middle" letter-spacing="0.5">Pro</text>'
-        '<text x="68" y="57" fill="#F5D0C5" font-family="Playfair Display, Georgia, Times New Roman, serif" font-size="15.5" font-style="italic" font-weight="400" letter-spacing="0.3">Tesorería &amp; Conciliación</text>'
+        '<svg width="100%" height="92" viewBox="0 0 300 92" role="img" aria-label="TESORIQ" xmlns="http://www.w3.org/2000/svg">'
+        '<g transform="translate(8 5)">'
+        '<path d="M13 15 C17 5 45 2 58 9 C70 15 73 38 66 49 C60 59 35 62 22 55 C10 48 7 27 13 15 Z" fill="#238458"/>'
+        '<path d="M79 9 C93 2 120 5 125 15 C131 27 128 48 116 55 C103 62 79 59 73 49 C66 38 67 15 79 9 Z" fill="#8CE0B5"/>'
+        '<path d="M69 57 C78 64 91 76 91 88 L91 90 L78 90 L78 74 C64 65 52 53 54 40 C56 29 66 23 69 22 C73 24 84 34 85 45 C86 50 79 56 69 57 Z" fill="#10251D"/>'
+        '</g>'
+        '<text x="151" y="47" fill="#FFFFFF" font-family="Manrope, Inter, Arial, sans-serif" font-size="29" font-weight="800" letter-spacing="1.2">TESORIQ</text>'
+        '<text x="152" y="68" fill="#8CE0B5" font-family="Inter, Arial, sans-serif" font-size="10.5" font-weight="500" letter-spacing="0.35">Tus finanzas. Más inteligentes.</text>'
         '</svg>'
         '</div>',
         unsafe_allow_html=True,
@@ -1207,7 +1195,7 @@ with st.sidebar:
 if modulo_analisis == "Gestión de Tasas BCV / Multidivisa":
     render_banner(
         "💱 Tasas de Cambio BCV y Conversión Multidivisa",
-        "Cargue masivamente las tasas oficiales desde Excel y realice conversiones multimoneda seguras en Tesora Pro.",
+        "Cargue masivamente las tasas oficiales desde Excel y realice conversiones multimoneda seguras en TESORIQ.",
     )
 
     archivo_tasas = st.file_uploader("Seleccione el archivo Excel de Tasas", type=["xlsx", "xls"])
@@ -1293,7 +1281,7 @@ elif modulo_maestros == "Bancos y Cuentas":
                     for c in ctas_filtradas:
                         total_mostradas += 1
                         st.markdown(
-                            f"<div style='background:#F1F5F9; border-left:4px solid #0A1E46; padding:10px 14px; border-radius:8px; margin-bottom:8px; font-weight:600;'>"
+                            f"<div style='background:#F1F5F9; border-left:4px solid #10251D; padding:10px 14px; border-radius:8px; margin-bottom:8px; font-weight:600;'>"
                             f"💳 {c}</div>",
                             unsafe_allow_html=True,
                         )
@@ -1303,7 +1291,7 @@ elif modulo_maestros == "Bancos y Cuentas":
 # --- VISTA: DASHBOARD PRINCIPAL CON ACCIONES RÁPIDAS Y LINKS ACCIONABLES ---
 elif menu_proceso == "Dashboard":
     render_banner(
-        "📊 Tesora Pro — Panel de Control Ejecutivo",
+        "📊 TESORIQ — Panel de Control Ejecutivo",
         "Resumen general de conciliaciones bancarias, partidas abiertas, asientos anulados e historial corporativo.",
     )
     res = st.session_state.resultado_conciliacion
@@ -1530,9 +1518,9 @@ elif menu_proceso == "Reglas":
         ]
     if "tags_personalizados" not in st.session_state:
         st.session_state.tags_personalizados = [
-            {"nombre": "Pendiente Auditoría", "color": "#0A1E46"},
-            {"nombre": "Comisión Bancaria", "color": "#1D4ED8"},
-            {"nombre": "Fondeo Cuentas Propias", "color": "#047857"},
+            {"nombre": "Pendiente Auditoría", "color": "#10251D"},
+            {"nombre": "Comisión Bancaria", "color": "#238458"},
+            {"nombre": "Fondeo Cuentas Propias", "color": "#174A35"},
         ]
 
     with st.container(border=True):
@@ -1579,7 +1567,7 @@ elif menu_proceso == "Reglas":
             st.markdown(tags_html, unsafe_allow_html=True)
             st.markdown("---")
             nom_t = st.text_input("Nombre del nuevo Tag", placeholder="Ej: Revisar con Proveedor")
-            col_t_sel = st.selectbox("Color del Tag", ["Azul Oscuro (#0A1E46)", "Azul Rey (#1D4ED8)", "Negro (#0B0F19)", "Verde (#047857)", "Ámbar (#B45309)", "Rojo (#B91C1C)"])
+            col_t_sel = st.selectbox("Color del Tag", ["Verde Bosque (#10251D)", "Verde Tecnológico (#238458)", "Negro (#171A18)", "Verde (#174A35)", "Ámbar (#B45309)", "Rojo (#B91C1C)"])
             if st.button("➕ Crear Tag"):
                 if nom_t.strip():
                     hex_c = col_t_sel.split("(")[-1].replace(")", "")
