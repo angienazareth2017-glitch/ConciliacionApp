@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
 import io
@@ -7,6 +6,9 @@ import urllib.request
 import urllib.error
 from datetime import datetime
 
+# ==========================================
+# 1. CONFIGURACIÓN DE PÁGINA E IDENTIDAD
+# ==========================================
 st.set_page_config(
     page_title="TESORIQ | Inteligencia y Control Financiero",
     page_icon="☘️",
@@ -14,338 +16,611 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-LOGO_TESORIQ_DARK_SVG = (
-    '<svg width="225" height="56" viewBox="0 0 265 64" '
-    'fill="none" xmlns="http://www.w3.org/2000/svg">'
-    '<path d="M30 29C30 29 11 31 7 18.5C3 6 18 3.5 25.5 10C32.5 16 30 29 30 29Z" '
-    'fill="#238458"/>'
-    '<path d="M34 29C34 29 53 31 57 18.5C61 6 46 3.5 38.5 10C31.5 16 34 29 34 29Z" '
-    'fill="#8CE0B5"/>'
-    '<path d="M32 31C22.5 36 17.5 45.5 25 53.5C28 56.5 30 57.5 30 62H34'
-    'C34 57.5 36 56.5 39 53.5C46.5 45.5 41.5 36 32 31Z" '
-    'fill="#238458" stroke="#8CE0B5" stroke-width="1.2"/>'
-    '<text x="72" y="44" font-family="Manrope, sans-serif" '
-    'font-weight="800" font-size="31" fill="#F4F6F4" '
-    'letter-spacing="1.5">TESORIQ</text></svg>'
-)
+# Logotipo Opción 3: Vectorial Mate Suave (SVG Nativo)
+LOGO_TESORIQ_SVG = """
+<svg width="220" height="54" viewBox="0 0 260 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <path d="M30 29C30 29 12 31 8 19C4 7 18 4 25 10C32 16 30 29 30 29Z" fill="#238458"/>
+  <path d="M34 29C34 29 52 31 56 19C60 7 46 4 39 10C32 16 34 29 34 29Z" fill="#8CE0B5"/>
+  <path d="M32 31C23 36 18 45 25 53C28 56 30 57 30 62H34C34 57 36 56 39 53C46 45 41 36 32 31Z" fill="#10251D"/>
+  <text x="72" y="44" font-family="'Manrope', sans-serif" font-weight="800" font-size="31" fill="#F4F6F4" letter-spacing="1.5">TESORIQ</text>
+</svg>
+"""
 
-def aplicar_identidad_tesoriq():
-    css_rules = [
-        "<style>",
-        "@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Manrope:wght@600;700;800&display=swap');",
-        ":root {",
-        "  --tesoriq-bosque: #10251D;",
-        "  --tesoriq-tecnologico: #238458;",
-        "  --tesoriq-menta: #8CE0B5;",
-        "  --tesoriq-carbon: #171A18;",
-        "  --tesoriq-blanco-suave: #F4F6F4;",
-        "  --tesoriq-blanco-puro: #FFFFFF;",
-        "}",
-        "html, body, [class*='css'], .stDataFrame, input, select {",
-        "  font-family: 'Inter', sans-serif !important;",
-        "  color: var(--tesoriq-carbon);",
-        "}",
-        "h1, h2, h3, h4, h5, h6 {",
-        "  font-family: 'Manrope', sans-serif !important;",
-        "  color: var(--tesoriq-bosque) !important;",
-        "  font-weight: 700 !important;",
-        "}",
-        ".stApp { background-color: var(--tesoriq-blanco-suave) !important; }",
-        "section[data-testid='stSidebar'] {",
-        "  background: linear-gradient(180deg, #10251D 0%, #171A18 100%) !important;",
-        "  border-right: 1px solid rgba(140, 224, 181, 0.18);",
-        "}",
-        "section[data-testid='stSidebar'] p, section[data-testid='stSidebar'] span, section[data-testid='stSidebar'] label, section[data-testid='stSidebar'] div {",
-        "  color: var(--tesoriq-blanco-suave) !important;",
-        "}",
-        "section[data-testid='stSidebar'] input {",
-        "  color: var(--tesoriq-carbon) !important;",
-        "  background-color: var(--tesoriq-blanco-suave) !important;",
-        "}",
-        ".sidebar-section {",
-        "  font-family: 'Manrope', sans-serif;",
-        "  font-size: 0.72rem;",
-        "  text-transform: uppercase;",
-        "  letter-spacing: 1.4px;",
-        "  color: #8CE0B5 !important;",
-        "  margin-top: 1.2rem;",
-        "  margin-bottom: 0.4rem;",
-        "  font-weight: 700;",
-        "}",
-        ".stButton > button, .stDownloadButton > button {",
-        "  background-color: var(--tesoriq-tecnologico) !important;",
-        "  color: var(--tesoriq-blanco-suave) !important;",
-        "  font-family: 'Manrope', sans-serif !important;",
-        "  font-weight: 600 !important;",
-        "  border-radius: 8px !important;",
-        "}",
-        ".stButton > button:hover, .stDownloadButton > button:hover {",
-        "  background-color: var(--tesoriq-bosque) !important;",
-        "}",
-        ".tesoriq-kpi-card {",
-        "  background-color: var(--tesoriq-blanco-puro);",
-        "  border: 1px solid #E1E7E4;",
-        "  border-left: 5px solid var(--tesoriq-tecnologico);",
-        "  border-radius: 12px;",
-        "  padding: 18px 20px;",
-        "  margin-bottom: 12px;",
-        "}",
-        ".tesoriq-kpi-title { font-size: 0.84rem; color: #55625C; font-weight: 500; }",
-        ".tesoriq-kpi-value { font-family: 'Manrope', sans-serif; font-size: 1.8rem; font-weight: 800; color: var(--tesoriq-bosque); margin: 0; }",
-        ".tesoriq-kpi-tag { display: inline-block; margin-top: 8px; padding: 2px 10px; font-size: 0.74rem; font-weight: 600; border-radius: 99px; background-color: rgba(140, 224, 181, 0.28); color: var(--tesoriq-bosque); }",
-        ".tesoriq-hero-banner { background: linear-gradient(135deg, #10251D 0%, #238458 100%); color: #F4F6F4; padding: 20px 26px; border-radius: 14px; margin-bottom: 22px; display: flex; justify-content: space-between; align-items: center; }",
-        ".tesoriq-hero-banner h2 { color: #F4F6F4 !important; margin: 0 0 4px 0 !important; font-size: 1.35rem !important; }",
-        ".tesoriq-hero-banner p { color: #8CE0B5 !important; margin: 0 !important; font-size: 0.92rem !important; }",
-        ".tesoriq-ia-panel { background-color: #FFFFFF; border: 1px solid #8CE0B5; border-left: 6px solid #10251D; border-radius: 12px; padding: 20px 24px; margin-top: 16px; }",
-        "</style>"
-    ]
-    st.markdown(chr(10).join(css_rules), unsafe_allow_html=True)
+LOGO_HEADER_LIGHT_SVG = """
+<svg width="210" height="50" viewBox="0 0 260 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <path d="M30 29C30 29 12 31 8 19C4 7 18 4 25 10C32 16 30 29 30 29Z" fill="#238458"/>
+  <path d="M34 29C34 29 52 31 56 19C60 7 46 4 39 10C32 16 34 29 34 29Z" fill="#8CE0B5"/>
+  <path d="M32 31C23 36 18 45 25 53C28 56 30 57 30 62H34C34 57 36 56 39 53C46 45 41 36 32 31Z" fill="#10251D"/>
+  <text x="72" y="44" font-family="'Manrope', sans-serif" font-weight="800" font-size="31" fill="#10251D" letter-spacing="1.5">TESORIQ</text>
+</svg>
+"""
 
-def renderizar_logo_sidebar():
-    html_logo = "<div style='padding: 6px 0 14px 0;'>" + LOGO_TESORIQ_DARK_SVG + "</div>"
-    st.markdown(html_logo, unsafe_allow_html=True)
+# ==========================================
+# 2. INYECCIÓN DE ESTILOS CSS (PALETA TESORIQ)
+# ==========================================
+st.markdown("""
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Manrope:wght@600;700;800&display=swap');
 
-def renderizar_banner_tesoriq():
-    html_banner = (
-        "<div class='tesoriq-hero-banner'>"
-        "<div><h2>Panel de Control e Inteligencia de Tesorería</h2>"
-        "<p>Deja de buscar diferencias. Empieza a resolverlas con trazabilidad total.</p></div>"
-        "<div style='text-align:right; font-weight:700; color:#8CE0B5;'>"
-        "TESORIQ • REGLAS C1-C4 ACTIVAS</div></div>"
-    )
-    st.markdown(html_banner, unsafe_allow_html=True)
+    :root {
+        --verde-bosque: #10251D;
+        --verde-tecnologico: #238458;
+        --menta-inteligente: #8CE0B5;
+        --carbon: #171A18;
+        --blanco-suave: #F4F6F4;
+        --blanco-puro: #FFFFFF;
+    }
 
+    html, body, [class*="css"] {
+        font-family: 'Inter', sans-serif;
+        color: var(--carbon);
+        background-color: var(--blanco-suave);
+    }
+
+    h1, h2, h3, h4, .tesoriq-title {
+        font-family: 'Manrope', sans-serif !important;
+        color: var(--verde-bosque) !important;
+        font-weight: 700 !important;
+    }
+
+    .stApp {
+        background-color: var(--blanco-suave);
+    }
+
+    /* Barra Lateral (Sidebar) en Verde Bosque y Carbón */
+    section[data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #10251D 0%, #171A18 100%) !important;
+        border-right: 1px solid rgba(140, 224, 181, 0.15);
+    }
+    section[data-testid="stSidebar"] * {
+        color: #F4F6F4 !important;
+    }
+    section[data-testid="stSidebar"] input {
+        color: #171A18 !important;
+        background-color: #F4F6F4 !important;
+    }
+    section[data-testid="stSidebar"] .stRadio label {
+        padding: 8px 12px;
+        border-radius: 8px;
+        transition: all 0.2s ease;
+    }
+    section[data-testid="stSidebar"] .stRadio label:hover {
+        background-color: rgba(35, 132, 88, 0.35);
+    }
+
+    .sidebar-section {
+        font-family: 'Manrope', sans-serif;
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 1.4px;
+        color: #8CE0B5 !important;
+        margin-top: 1.2rem;
+        margin-bottom: 0.4rem;
+        font-weight: 700;
+    }
+
+    /* Tarjetas de KPI (Dashboard) */
+    .kpi-card {
+        background-color: var(--blanco-puro);
+        border: 1px solid #E2E8E5;
+        border-left: 5px solid var(--verde-tecnologico);
+        border-radius: 12px;
+        padding: 20px 22px;
+        box-shadow: 0 4px 12px rgba(16, 37, 29, 0.04);
+    }
+    .kpi-label {
+        font-size: 0.85rem;
+        color: #5A6560;
+        font-weight: 500;
+        margin-bottom: 6px;
+    }
+    .kpi-value {
+        font-family: 'Manrope', sans-serif;
+        font-size: 1.85rem;
+        font-weight: 800;
+        color: var(--verde-bosque);
+        margin: 0;
+    }
+    .kpi-badge {
+        display: inline-block;
+        margin-top: 8px;
+        padding: 3px 10px;
+        font-size: 0.75rem;
+        font-weight: 600;
+        border-radius: 20px;
+        background-color: rgba(140, 224, 181, 0.25);
+        color: var(--verde-bosque);
+    }
+
+    /* Botones Corporativos */
+    .stButton > button {
+        background-color: var(--verde-tecnologico) !important;
+        color: #F4F6F4 !important;
+        font-family: 'Manrope', sans-serif !important;
+        font-weight: 600 !important;
+        border: none !important;
+        border-radius: 8px !important;
+        padding: 0.55rem 1.25rem !important;
+        transition: all 0.2s ease !important;
+    }
+    .stButton > button:hover {
+        background-color: var(--verde-bosque) !important;
+        box-shadow: 0 4px 12px rgba(35, 132, 88, 0.25) !important;
+    }
+
+    /* Banner Superior */
+    .tesoriq-banner {
+        background: linear-gradient(135deg, #10251D 0%, #238458 100%);
+        color: #F4F6F4;
+        padding: 22px 28px;
+        border-radius: 14px;
+        margin-bottom: 24px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+    .tesoriq-banner h3 {
+        color: #F4F6F4 !important;
+        margin: 0 0 4px 0;
+        font-size: 1.25rem;
+    }
+    .tesoriq-banner p {
+        color: #8CE0B5;
+        margin: 0;
+        font-size: 0.9rem;
+    }
+
+    /* Caja de Dictamen IA */
+    .ia-box {
+        background-color: #FFFFFF;
+        border: 1px solid #8CE0B5;
+        border-left: 6px solid #10251D;
+        border-radius: 10px;
+        padding: 18px 22px;
+        margin-top: 14px;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# ==========================================
+# 3. GESTIÓN DE ESTADO E INICIO DE SESIÓN
+# ==========================================
 if "autenticado" not in st.session_state:
     st.session_state.autenticado = False
-if "tasa_usd" not in st.session_state:
-    st.session_state.tasa_usd = 45.50
-if "tasa_eur" not in st.session_state:
-    st.session_state.tasa_eur = 48.20
-if "lista_conciliaciones" not in st.session_state:
-    st.session_state.lista_conciliaciones = [
-        {"id": "CONC-001", "fecha": "2026-11-14", "cuenta": "Banco Mercantil - USD/VES", "estado": "Abierta (Retomable)", "movimientos": 5},
-        {"id": "CONC-002", "fecha": "2026-11-10", "cuenta": "Banesco - Corriente", "estado": "Cerrada", "movimientos": 12}
-    ]
-if "overrides_c1_c4" not in st.session_state:
-    st.session_state.overrides_c1_c4 = {}
+if "df_banco" not in st.session_state:
+    st.session_state.df_banco = None
+if "df_erp" not in st.session_state:
+    st.session_state.df_erp = None
+if "df_resultado" not in st.session_state:
+    st.session_state.df_resultado = None
+if "tasa_bcv" not in st.session_state:
+    st.session_state.tasa_bcv = 45.50
+if "analisis_ia_texto" not in st.session_state:
+    st.session_state.analisis_ia_texto = None
 
-if not st.session_state.autenticado:
-    col1, col2, col3 = st.columns([1, 1.4, 1])
+def obtener_api_key_defecto():
+    try:
+        if "OPENROUTER_API_KEY" in st.secrets:
+            return st.secrets["OPENROUTER_API_KEY"]
+        if "OPENAI_API_KEY" in st.secrets:
+            return st.secrets["OPENAI_API_KEY"]
+    except Exception:
+        pass
+    return ""
+
+if "api_key_ia" not in st.session_state:
+    st.session_state.api_key_ia = obtener_api_key_defecto()
+
+def mostrar_login():
+    col1, col2, col3 = st.columns([1, 1.3, 1])
     with col2:
         st.write("")
         st.write("")
-        st.markdown("<div style='text-align:center; padding-top: 2rem;'>" + LOGO_TESORIQ_DARK_SVG + "</div>", unsafe_allow_html=True)
+        st.markdown(f"<div style='text-align:center;'>{LOGO_HEADER_LIGHT_SVG}</div>", unsafe_allow_html=True)
         st.markdown(
-            "<p style='text-align:center; color:#5A6560; font-size:0.95rem; margin-bottom: 2rem;'>Plataforma de Inteligencia y Conciliación Financiera</p>",
+            "<p style='text-align:center; color:#5A6560; font-size:0.95rem;'>"
+            "Automatización y Control de Conciliaciones Financieras</p>",
             unsafe_allow_html=True
         )
         with st.container(border=True):
-            st.markdown("#### Acceso Corporativo Segregado")
-            usuario_input = st.text_input("Usuario o Correo", placeholder="analista.tesoreria@empresa.com")
-            clave_input = st.text_input("Contraseña", type="password", placeholder="••••••••")
-            st.write("")
+            st.markdown("#### Acceso Corporativo")
+            usuario = st.text_input("Usuario / Correo", placeholder="analista@empresa.com")
+            clave = st.text_input("Contraseña de acceso", type="password", placeholder="••••••••")
             if st.button("Ingresar a TESORIQ", use_container_width=True):
-                if clave_input.strip() != "":
+                if clave.strip() != "":
                     st.session_state.autenticado = True
                     st.rerun()
                 else:
-                    st.error("Por favor ingrese su contraseña para continuar.")
+                    st.error("Por favor ingresa tu contraseña para continuar.")
+
+if not st.session_state.autenticado:
+    mostrar_login()
     st.stop()
 
-def evaluar_reglas_c1_c4(row, tolerancia=0.05):
-    merge = row.get("_merge", "both")
-    dif = row.get("Diferencia_Absoluta_VES", 0.0)
-    if merge == "both":
-        if dif <= tolerancia:
-            return "C1: Conciliado Exacto", "Aprobado Automático"
-        elif dif <= 15.00:
-            return "C2: Diferencia por Redondeo / Céntimos", "Advertencia Leve (Aceptable)"
-        else:
-            return "C3: Posible Retención SENIAT o Comisión Bancaria", "Advertencia Moderada (Requiere Validación)"
-    elif merge == "left_only":
-        return "C4: Pendiente en ERP (Solo en Banco)", "Alerta: Partida No Registrada en Libros"
-    else:
-        return "C4: Pendiente en Banco (Solo en ERP)", "Alerta: Partida en Tránsito o No Efectiva"
-
+# ==========================================
+# 4. MOTOR DE CONCILIACIÓN E INTELIGENCIA IA
+# ==========================================
 def ejecutar_conciliacion(df_b, df_e, tolerancia=0.05):
+    """Cruza extracto bancario vs mayor ERP preservando 100% los montos de origen."""
     b = df_b.copy()
     e = df_e.copy()
+
     b["Referencia_Clean"] = b["Referencia"].astype(str).str.strip()
     e["Referencia_Clean"] = e["Referencia"].astype(str).str.strip()
-    cruce = pd.merge(b, e, on="Referencia_Clean", how="outer", suffixes=("_Banco", "_ERP"), indicator=True)
+
+    cruce = pd.merge(
+        b, e,
+        on="Referencia_Clean",
+        how="outer",
+        suffixes=("_Banco", "_ERP"),
+        indicator=True
+    )
+
     cruce["Monto_Banco"] = pd.to_numeric(cruce["Monto_Banco"], errors="coerce").fillna(0.0)
     cruce["Monto_ERP"] = pd.to_numeric(cruce["Monto_ERP"], errors="coerce").fillna(0.0)
-    cruce["Diferencia_Absoluta_VES"] = (cruce["Monto_Banco"] - cruce["Monto_ERP"]).abs().round(2)
-    resultados_reglas = []
-    mensajes_alerta = []
-    for _, r in cruce.iterrows():
-        regla, alerta = evaluar_reglas_c1_c4(r, tolerancia)
-        resultados_reglas.append(regla)
-        mensajes_alerta.append(alerta)
-    cruce["Regla_Aplicada"] = resultados_reglas
-    cruce["Estatus_Alerta"] = mensajes_alerta
-    estados_finales = []
-    for idx, r in cruce.iterrows():
-        ref_key = str(r.get("Referencia_Clean", idx))
-        if ref_key in st.session_state.overrides_c1_c4:
-            estados_finales.append(st.session_state.overrides_c1_c4[ref_key])
+    cruce["Diferencia_Absoluta"] = (cruce["Monto_Banco"] - cruce["Monto_ERP"]).abs().round(2)
+
+    def clasificar_partida(row):
+        if row["_merge"] == "both":
+            if row["Diferencia_Absoluta"] <= tolerancia:
+                return "Conciliado Exacto"
+            return "Diferencia en Monto"
+        elif row["_merge"] == "left_only":
+            return "Pendiente en ERP (Solo Banco)"
         else:
-            regla_txt = r["Regla_Aplicada"]
-            if "C1" in regla_txt or "C2" in regla_txt:
-                estados_finales.append("Conciliado")
-            else:
-                estados_finales.append("Pendiente por Revisar")
-    cruce["Estado_Conciliacion"] = estados_finales
+            return "Pendiente en Banco (Solo ERP)"
+
+    cruce["Estado_Conciliacion"] = cruce.apply(clasificar_partida, axis=1)
+
+    def sugerir_causa_local(row):
+        estado = row["Estado_Conciliacion"]
+        dif = row["Diferencia_Absoluta"]
+        if estado == "Conciliado Exacto":
+            return "Sin novedad. Cruce exacto."
+        elif estado == "Diferencia en Monto":
+            if dif <= 5.00:
+                return "Posible diferencial por redondeo o céntimos en tasa BCV."
+            return "Verificar retención SENIAT (IVA 75%/100% o ISLR) o comisión bancaria descontada."
+        elif estado == "Pendiente en ERP (Solo Banco)":
+            return "Cargo/abono bancario no contabilizado (comisión, IGTF o cobranza por identificar)."
+        else:
+            return "Partida en tránsito registrada en libros pero aún no efectiva en banco."
+
+    cruce["Diagnostico_Preliminar"] = cruce.apply(sugerir_causa_local, axis=1)
     return cruce
 
-def generar_datos_demo():
+def analizar_excepciones_con_ia(df_excepciones, tasa_bcv, api_key, modelo="openai/gpt-4o-mini"):
+    """Envía las partidas abiertas a OpenRouter / OpenAI para dictamen contable asistido."""
+    resumen_json = df_excepciones[[
+        "Referencia_Clean", "Estado_Conciliacion",
+        "Monto_Banco", "Monto_ERP",
+        "Diferencia_Absoluta", "Equivalente_USD_BCV"
+    ]].to_dict(orient="records")
+
+    prompt_sistema = (
+        "Eres el auditor financiero y analista experto de tesorería de la plataforma TESORIQ en Venezuela. "
+        "REGLA DE GOBERNANZA: Nunca alteres los montos originales ni apruebes ajustes autónomos; tu rol es "
+        "analizar las partidas pendientes usando valor absoluto y sugerir al analista humano la acción contable."
+    )
+
+    prompt_usuario = f"""
+    Tasa oficial BCV aplicada: {tasa_bcv:.2f} VES/USD.
+    Analiza las siguientes partidas pendientes de conciliación bancaria:
+    {json.dumps(resumen_json, ensure_ascii=False)}
+
+    Para cada referencia indica de forma ejecutiva y estructurada:
+    1. **Causa raíz probable** (ej. comisión bancaria, IGTF, retención de IVA 75%/100% o ISLR SENIAT, partida en tránsito o diferencial por redondeo).
+    2. **Acción contable / Asiento sugerido** en el ERP para que el analista de cuentas por pagar / tesorería lo valide.
+    """
+
+    # Si no hay API Key configurada, genera un dictamen estructurado inteligente local sin fallar
+    if not api_key or api_key.strip() == "":
+        lineas = ["#### 📋 Dictamen Técnico Asistido TESORIQ (Modo Local Activo)"]
+        lineas.append(f"*Tasa de referencia BCV: **{tasa_bcv:.2f} VES/USD** — Integridad de datos originales: **100% Intacta***\n")
+        for item in resumen_json:
+            ref = item["Referencia_Clean"]
+            est = item["Estado_Conciliacion"]
+            mb = item["Monto_Banco"]
+            me = item["Monto_ERP"]
+            dif = item["Diferencia_Absoluta"]
+            usd = item["Equivalente_USD_BCV"]
+            if est == "Diferencia en Monto":
+                accion = "Revisar comprobante de retención IVA/ISLR o ajuste por céntimos de tasa BCV antes de contabilizar diferencia."
+            elif "Solo Banco" in est:
+                accion = "Registrar nota de débito/comisión bancaria o solicitar soporte de pago al departamento correspondiente."
+            else:
+                accion = "Mantener en control de partidas en tránsito hasta confirmar efectividad en el próximo extracto bancario."
+            lineas.append(
+                f"- **Referencia `{ref}`** ({est}): Banco `{mb:.2f}` vs ERP `{me:.2f}` | "
+                f"Diferencia Absoluta: **{dif:.2f} VES** (*{usd:.2f} USD*).  \n"
+                f"  ↳ **Sugerencia para el Analista:** {accion}"
+            )
+        lineas.append("\n*(Nota: Ingresa tu API Key de OpenRouter en la barra lateral para activar la redacción generativa avanzada).*")
+        return "\n".join(lineas)
+
+    url = "https://openrouter.ai/api/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key.strip()}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://tesoriq.app",
+        "X-Title": "TESORIQ Financial Reconciliation"
+    }
+    payload = {
+        "model": modelo,
+        "messages": [
+            {"role": "system", "content": prompt_sistema},
+            {"role": "user", "content": prompt_usuario}
+        ],
+        "temperature": 0.2
+    }
+
+    try:
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=25) as resp:
+            respuesta_data = json.loads(resp.read().decode("utf-8"))
+            return respuesta_data["choices"][0]["message"]["content"]
+    except urllib.error.HTTPError as e:
+        return f"⚠️ Error de autenticación o límite en OpenRouter (Código {e.code}). Verifica tu API Key en la barra lateral."
+    except Exception as e:
+        return f"⚠️ No se pudo conectar con OpenRouter ({str(e)}). Revisa tu conexión a internet."
+
+def generar_datos_ejemplo():
     df_b = pd.DataFrame({
         "Fecha_Banco": ["2026-11-10", "2026-11-11", "2026-11-12", "2026-11-13", "2026-11-14"],
         "Referencia": ["REF-1001", "REF-1002", "REF-1003", "REF-1004", "REF-1005"],
-        "Concepto_Banco": ["Pago Proveedor Vet", "Cobro Distribuidora", "Comisión + IGTF 3%", "Pago Servicios", "Abono Clientes"],
+        "Descripcion_Banco": ["Pago Proveedor Vet", "Transferencia Recibida", "Comisión Mantenimiento e IGTF", "Pago Servicios", "Abono Clientes"],
         "Monto_Banco": [1500.00, 3200.50, 45.00, 890.00, 2100.00]
     })
     df_e = pd.DataFrame({
         "Fecha_ERP": ["2026-11-10", "2026-11-11", "2026-11-13", "2026-11-14", "2026-11-15"],
         "Referencia": ["REF-1001", "REF-1002", "REF-1004", "REF-1005", "REF-1006"],
-        "Concepto_ERP": ["Factura Quimio-Vet", "Cobro Distribuidora", "Servicio Eléctrico", "Cobro Lote B", "Pago en Tránsito"],
+        "Descripcion_ERP": ["Factura Quimio-Vet", "Cobro Distribuidora", "Servicio Eléctrico", "Cobro Lote B", "Pago en Tránsito Proveedor"],
         "Monto_ERP": [1500.00, 3200.00, 890.00, 2100.00, 740.00]
     })
     return df_b, df_e
 
-def tarjeta_kpi_html(titulo, valor, etiqueta):
-    return (
-        "<div class='tesoriq-kpi-card'>"
-        "<div class='tesoriq-kpi-title'>" + str(titulo) + "</div>"
-        "<p class='tesoriq-kpi-value'>" + str(valor) + "</p>"
-        "<span class='tesoriq-kpi-tag'>" + str(etiqueta) + "</span>"
-        "</div>"
-    )
-
-aplicar_identidad_tesoriq()
-
-if "df_banco" not in st.session_state:
-    st.session_state.df_banco, st.session_state.df_erp = generar_datos_demo()
-if "df_resultado" not in st.session_state:
-    st.session_state.df_resultado = ejecutar_conciliacion(st.session_state.df_banco, st.session_state.df_erp)
-
+# ==========================================
+# 5. BARRA LATERAL (MENÚ ESTRUCTURADO)
+# ==========================================
 with st.sidebar:
-    renderizar_logo_sidebar()
-    st.markdown("<div class='sidebar-section'>Navegación Principal</div>", unsafe_allow_html=True)
-    menu_activo = st.radio(
-        "Ir a:",
+    st.markdown(LOGO_TESORIQ_SVG, unsafe_allow_html=True)
+    st.markdown("<div class='sidebar-section'>Proceso Principal</div>", unsafe_allow_html=True)
+    menu = st.radio(
+        "Navegación",
         options=[
-            "📊 Dashboard Ejecutivo",
-            "📥 Importar Extracto y ERP",
+            "📊 Dashboard",
+            "📥 Importar Archivos",
             "🔄 Conciliación y Cruce",
-            "⚠️ Reglas C1-C4 y Excepciones",
-            "🏛️ Tasas Multimoneda (USD / EUR)"
+            "⚠️ Partidas Pendientes (IA)",
+            "🏛️ Tasas BCV y Reglas"
         ],
         label_visibility="collapsed"
     )
-    st.markdown("<div class='sidebar-section'>Control de Sesión</div>", unsafe_allow_html=True)
-    if st.button("🔒 Cerrar Sesión", use_container_width=True):
+
+    st.markdown("<div class='sidebar-section'>Parámetros del Día</div>", unsafe_allow_html=True)
+    st.session_state.tasa_bcv = st.number_input(
+        "Tasa Oficial BCV (VES/USD)",
+        min_value=1.0,
+        value=float(st.session_state.tasa_bcv),
+        step=0.10,
+        format="%.2f"
+    )
+
+    st.markdown("<div class='sidebar-section'>Motor IA (OpenRouter)</div>", unsafe_allow_html=True)
+    st.session_state.api_key_ia = st.text_input(
+        "OpenRouter API Key",
+        value=st.session_state.api_key_ia,
+        type="password",
+        placeholder="sk-or-v1-..."
+    )
+    modelo_ia = st.selectbox(
+        "Modelo LLM Activo",
+        options=[
+            "openai/gpt-4o-mini",
+            "google/gemini-2.0-flash-001",
+            "anthropic/claude-3.5-haiku"
+        ]
+    )
+
+    st.caption(f"Fecha activa: {datetime.now().strftime('%d/%m/%Y')}")
+    st.divider()
+    if st.button("Cerrar Sesión", use_container_width=True):
         st.session_state.autenticado = False
         st.rerun()
 
-renderizar_banner_tesoriq()
-
+# ==========================================
+# 6. VISTAS DE LA APLICACIÓN
+# ==========================================
 df_res = st.session_state.df_resultado
-conciliados = len(df_res[df_res["Estado_Conciliacion"] == "Conciliado"]) if df_res is not None else 0
-pendientes = len(df_res[df_res["Estado_Conciliacion"] == "Pendiente por Revisar"]) if df_res is not None else 0
 
-if menu_activo == "📊 Dashboard Ejecutivo":
+if df_res is not None:
+    total_mov = len(df_res)
+    conciliados = len(df_res[df_res["Estado_Conciliacion"] == "Conciliado Exacto"])
+    diferencias = len(df_res[df_res["Estado_Conciliacion"] == "Diferencia en Monto"])
+    abiertas = len(df_res[df_res["Estado_Conciliacion"].str.contains("Pendiente")])
+else:
+    total_mov, conciliados, diferencias, abiertas = 0, 0, 0, 0
+
+if menu == "📊 Dashboard":
+    st.markdown("""
+    <div class="tesoriq-banner">
+        <div>
+            <h3>Panel de Control e Inteligencia de Tesorería</h3>
+            <p>Deja de buscar diferencias. Empieza a resolverlas con trazabilidad total.</p>
+        </div>
+        <div style="text-align:right; font-family:'Manrope',sans-serif; font-weight:700; color:#8CE0B5;">
+            TESORIQ v2.5 • IA Activa
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
     c1, c2, c3, c4 = st.columns(4)
     with c1:
-        st.markdown(tarjeta_kpi_html("Partidas Pendientes", pendientes, "Requieren decisión"), unsafe_allow_html=True)
+        st.markdown(f"""
+        <div class="kpi-card">
+            <div class="kpi-label">Partidas Abiertas</div>
+            <p class="kpi-value">{abiertas}</p>
+            <span class="kpi-badge">Por revisar</span>
+        </div>
+        """, unsafe_allow_html=True)
     with c2:
-        st.markdown(tarjeta_kpi_html("Movimientos Conciliados", conciliados, "Aprobados"), unsafe_allow_html=True)
+        st.markdown(f"""
+        <div class="kpi-card">
+            <div class="kpi-label">Movimientos Conciliados</div>
+            <p class="kpi-value">{conciliados}</p>
+            <span class="kpi-badge">Match 100%</span>
+        </div>
+        """, unsafe_allow_html=True)
     with c3:
-        st.markdown(tarjeta_kpi_html("Total Movimientos", len(df_res) if df_res is not None else 0, "Cruce activo"), unsafe_allow_html=True)
+        st.markdown(f"""
+        <div class="kpi-card">
+            <div class="kpi-label">Diferencias de Monto</div>
+            <p class="kpi-value">{diferencias}</p>
+            <span class="kpi-badge">Valor absoluto</span>
+        </div>
+        """, unsafe_allow_html=True)
     with c4:
-        st.markdown(tarjeta_kpi_html("Tasa BCV USD", "{:.2f}".format(st.session_state.tasa_usd), "VES / USD"), unsafe_allow_html=True)
+        st.markdown(f"""
+        <div class="kpi-card">
+            <div class="kpi-label">Tasa BCV Aplicada</div>
+            <p class="kpi-value">{st.session_state.tasa_bcv:.2f}</p>
+            <span class="kpi-badge">VES / USD</span>
+        </div>
+        """, unsafe_allow_html=True)
 
     st.write("")
-    st.markdown("#### 📁 Conciliaciones Recientes (Retomar o Cerrar)")
-    st.caption("Selecciona una conciliación del historial para gestionar su estado operativo.")
-    df_historial = pd.DataFrame(st.session_state.lista_conciliaciones)
-    for i, row in df_historial.iterrows():
-        cols = st.columns([1.5, 2, 2, 1.2, 1.2])
-        cols[0].write(f"**{row['id']}**")
-        cols[1].write(row['fecha'])
-        cols[2].write(row['cuenta'])
-        if "Abierta" in row['estado']:
-            cols[3].markdown(f"<span style='color:#238458; font-weight:650;'>{row['estado']}</span>", unsafe_allow_html=True)
-            if cols[4].button("Cerrar", key=f"cerrar_{i}"):
-                st.session_state.lista_conciliaciones[i]['estado'] = "Cerrada"
-                st.rerun()
-        else:
-            cols[3].markdown(f"<span style='color:#777;'>{row['estado']}</span>", unsafe_allow_html=True)
-            if cols[4].button("Retomar", key=f"retomar_{i}"):
-                st.session_state.lista_conciliaciones[i]['estado'] = "Abierta (Retomable)"
-                st.rerun()
+    col_left, col_right = st.columns([1.8, 1])
 
-    st.write("")
-    st.markdown("#### Resumen del Cruce Actual")
-    st.dataframe(df_res, use_container_width=True, hide_index=True)
+    with col_left:
+        with st.container(border=True):
+            st.markdown("#### Conciliaciones Recientes")
+            if df_res is None:
+                st.info("Aún no se ha ejecutado una conciliación en esta sesión. Usa el botón de prueba rápida o importa tus archivos.")
+                if st.button("⚡ Cargar Datos Demo y Conciliar Ahora"):
+                    b_demo, e_demo = generar_datos_ejemplo()
+                    st.session_state.df_banco = b_demo
+                    st.session_state.df_erp = e_demo
+                    st.session_state.df_resultado = ejecutar_conciliacion(b_demo, e_demo)
+                    st.rerun()
+            else:
+                st.dataframe(
+                    df_res[[
+                        "Referencia_Clean", "Monto_Banco", "Monto_ERP",
+                        "Diferencia_Absoluta", "Estado_Conciliacion", "Diagnostico_Preliminar"
+                    ]],
+                    use_container_width=True,
+                    hide_index=True
+                )
 
-elif menu_activo == "📥 Importar Extracto y ERP":
+    with col_right:
+        with st.container(border=True):
+            st.markdown("#### Gobernanza y Supervisión")
+            st.write(
+                "• **Integridad garantizada:** Los montos originales de Banco y ERP permanecen inmutables.\n"
+                "• **Supervisión humana:** TESORIQ clasifica y sugiere acciones sobre excepciones con IA, manteniendo la aprobación final en el analista."
+            )
+            if df_res is not None:
+                buffer = io.BytesIO()
+                with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+                    df_res.to_excel(writer, index=False, sheet_name="Conciliacion_Tesoriq")
+                st.download_button(
+                    label="📥 Descargar Reporte Excel (.xlsx)",
+                    data=buffer.getvalue(),
+                    file_name=f"Conciliacion_TESORIQ_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+
+elif menu == "📥 Importar Archivos":
+    st.markdown("### Importación de Estados de Cuenta y Mayor Contable")
     col_b, col_e = st.columns(2)
+
     with col_b:
-        up_b = st.file_uploader("1. Subir Extracto Bancario (CSV / Excel)", type=["csv", "xlsx"])
-        if up_b is not None:
-            st.session_state.df_banco = pd.read_csv(up_b) if up_b.name.endswith(".csv") else pd.read_excel(up_b)
-            st.success("Extracto bancario actualizado.")
+        with st.container(border=True):
+            st.markdown("#### 1. Extracto Bancario (CSV / Excel)")
+            archivo_b = st.file_uploader("Subir archivo de Banco", type=["csv", "xlsx"], key="up_b")
+            if archivo_b:
+                st.session_state.df_banco = pd.read_csv(archivo_b) if archivo_b.name.endswith(".csv") else pd.read_excel(archivo_b)
+                st.success(f"Extracto cargado: {len(st.session_state.df_banco)} registros.")
+
     with col_e:
-        up_e = st.file_uploader("2. Subir Mayor Auxiliar ERP (CSV / Excel)", type=["csv", "xlsx"])
-        if up_e is not None:
-            st.session_state.df_erp = pd.read_csv(up_e) if up_e.name.endswith(".csv") else pd.read_excel(up_e)
-            st.success("Mayor ERP actualizado.")
+        with st.container(border=True):
+            st.markdown("#### 2. Mayor Auxiliar ERP (CSV / Excel)")
+            archivo_e = st.file_uploader("Subir archivo ERP (SAP / Busis)", type=["csv", "xlsx"], key="up_e")
+            if archivo_e:
+                st.session_state.df_erp = pd.read_csv(archivo_e) if archivo_e.name.endswith(".csv") else pd.read_excel(archivo_e)
+                st.success(f"Mayor ERP cargado: {len(st.session_state.df_erp)} registros.")
 
-elif menu_activo == "🔄 Conciliación y Cruce":
-    tol = st.slider("Tolerancia por redondeo (VES)", 0.00, 5.00, 0.05, 0.01)
-    if st.button("🚀 Ejecutar Cruce Inteligente"):
-        st.session_state.df_resultado = ejecutar_conciliacion(st.session_state.df_banco, st.session_state.df_erp, tolerancia=tol)
-        st.success("Cruce ejecutado aplicando las reglas de negocio C1-C4.")
-    st.dataframe(st.session_state.df_resultado, use_container_width=True, hide_index=True)
+    st.write("")
+    if st.button("Cargar Plantilla de Ejemplo Lista para Prueba"):
+        b_demo, e_demo = generar_datos_ejemplo()
+        st.session_state.df_banco = b_demo
+        st.session_state.df_erp = e_demo
+        st.success("Archivos de prueba cargados correctamente. Dirígete a 'Conciliación y Cruce'.")
 
-elif menu_activo == "⚠️ Reglas C1-C4 y Excepciones":
-    st.markdown("### ⚠️ Auditoría de Reglas y Decisión Humana (C1 - C4)")
-    st.caption("Inspeccione las advertencias generadas por las reglas del sistema y decida manualmente si desea conciliar la partida (Override) o mantenerla pendiente.")
-    if df_res is not None:
-        for idx, row in df_res.iterrows():
-            ref = str(row.get("Referencia_Clean", "Item-" + str(idx)))
-            regla = str(row.get("Regla_Aplicada", "C1"))
-            alerta = str(row.get("Estatus_Alerta", "Aprobado"))
-            estado_actual = str(row.get("Estado_Conciliacion", "Pendiente"))
-            with st.container(border=True):
-                c_info1, c_info2, c_btn = st.columns([2.5, 2, 1.5])
-                mb = row.get("Monto_Banco", 0)
-                me = row.get("Monto_ERP", 0)
-                c_info1.markdown("**Ref:** `" + ref + "` | **Banco:** " + "{:,.2f}".format(mb) + " | **ERP:** " + "{:,.2f}".format(me))
-                c_info2.markdown("**Regla:** `" + regla + "`\n\n**Estatus:** *" + alerta + "*")
-                is_conciliado = (estado_actual == "Conciliado")
-                if is_conciliado:
-                    c_btn.success("✅ Conciliado")
-                    if c_btn.button("Rechazar / Reabrir", key="reabrir_" + str(idx)):
-                        st.session_state.overrides_c1_c4[ref] = "Pendiente por Revisar"
-                        st.session_state.df_resultado = ejecutar_conciliacion(st.session_state.df_banco, st.session_state.df_erp)
-                        st.rerun()
-                else:
-                    c_btn.warning("⚠️ Pendiente")
-                    if c_btn.button("Forzar Conciliación", key="forzar_" + str(idx)):
-                        st.session_state.overrides_c1_c4[ref] = "Conciliado"
-                        st.session_state.df_resultado = ejecutar_conciliacion(st.session_state.df_banco, st.session_state.df_erp)
-                        st.rerun()
+elif menu == "🔄 Conciliación y Cruce":
+    st.markdown("### Motor de Conciliación Asistida")
+    if st.session_state.df_banco is None or st.session_state.df_erp is None:
+        st.warning("Primero debes cargar los archivos en el módulo 'Importar Archivos'.")
     else:
-        st.info("Ejecute primero un cruce en el módulo de Conciliación.")
+        tolerancia = st.slider("Tolerancia para diferencias por redondeo (VES/USD)", 0.00, 5.00, 0.05, 0.01)
+        if st.button("🚀 Ejecutar Cruce Inteligente"):
+            st.session_state.df_resultado = ejecutar_conciliacion(
+                st.session_state.df_banco,
+                st.session_state.df_erp,
+                tolerancia=tolerancia
+            )
+            st.session_state.analisis_ia_texto = None
+            st.success("Conciliación completada respetando el 100% de la integridad de los datos de origen.")
 
-elif menu_activo == "🏛️ Tasas Multimoneda (USD / EUR)":
-    st.markdown("### Configuración de Tasas de Cambio Oficiales (BCV)")
+        if st.session_state.df_resultado is not None:
+            st.dataframe(st.session_state.df_resultado, use_container_width=True, hide_index=True)
+
+elif menu == "⚠️ Partidas Pendientes (IA)":
+    st.markdown("### Auditoría Inteligente de Excepciones y Partidas Abiertas")
+    if df_res is None:
+        st.info("Ejecuta primero una conciliación en el Dashboard o en 'Conciliación y Cruce' para auditar las partidas pendientes.")
+    else:
+        excepciones = df_res[df_res["Estado_Conciliacion"] != "Conciliado Exacto"].copy()
+        excepciones["Equivalente_USD_BCV"] = (excepciones["Diferencia_Absoluta"] / st.session_state.tasa_bcv).round(2)
+
+        st.markdown(f"**Total de excepciones detectadas:** `{len(excepciones)}` partidas requieren validación del analista.")
+        st.dataframe(
+            excepciones[[
+                "Referencia_Clean", "Estado_Conciliacion",
+                "Monto_Banco", "Monto_ERP",
+                "Diferencia_Absoluta", "Equivalente_USD_BCV",
+                "Diagnostico_Preliminar"
+            ]],
+            use_container_width=True,
+            hide_index=True
+        )
+
+        st.write("")
+        col_btn1, col_btn2 = st.columns([1.2, 2])
+        with col_btn1:
+            if st.button("🤖 Generar Dictamen Contable con IA", use_container_width=True):
+                with st.spinner("Analizando excepciones bajo reglas de tesorería y normativa SENIAT..."):
+                    st.session_state.analisis_ia_texto = analizar_excepciones_con_ia(
+                        excepciones,
+                        st.session_state.tasa_bcv,
+                        st.session_state.api_key_ia,
+                        modelo=modelo_ia
+                    )
+
+        if st.session_state.analisis_ia_texto:
+            st.markdown("<div class='ia-box'>", unsafe_allow_html=True)
+            st.markdown(st.session_state.analisis_ia_texto)
+            st.markdown("</div>", unsafe_allow_html=True)
+
+elif menu == "🏛️ Tasas BCV y Reglas":
+    st.markdown("### Configuración de Reglas de Negocio y Multimoneda")
     with st.container(border=True):
-        col_t1, col_t2 = st.columns(2)
-        with col_t1:
-            st.session_state.tasa_usd = st.number_input("Tasa Oficial Dólar (USD / VES)", min_value=1.0, value=float(st.session_state.tasa_usd), step=0.10, format="%.2f")
-        with col_t2:
-            st.session_state.tasa_eur = st.number_input("Tasa Oficial Euro (EUR / VES)", min_value=1.0, value=float(st.session_state.tasa_eur), step=0.10, format="%.2f")
-        st.success("Tasas actualizadas. USD: " + "{:.2f}".format(st.session_state.tasa_usd) + " | EUR: " + "{:.2f}".format(st.session_state.tasa_eur))
+        st.write(f"**Tasa Oficial BCV activa en sesión:** {st.session_state.tasa_bcv:.2f} VES/USD")
+        st.write("**Regla de Valor Absoluto:** Activada (`|Monto_Banco - Monto_ERP|`) para evitar errores de interpretación en diferencias negativas.")
+        st.write("**Retenciones SENIAT (IVA / ISLR) e IGTF:** Reglas de auditoría incorporadas en el motor de análisis de excepciones.")
