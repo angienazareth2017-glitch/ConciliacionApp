@@ -111,79 +111,61 @@ def renderizar_banner_tesoriq():
         "<div><h2>Panel de Control e Inteligencia de Tesorería</h2>"
         "<p>Deja de buscar diferencias. Empieza a resolverlas con trazabilidad total.</p></div>"
         "<div style='text-align:right; font-weight:700; color:#8CE0B5;'>"
-        "TESORIQ • ENTERPRISE DATA</div></div>"
+        "TESORIQ • REGLAS C1-C4 ACTIVAS</div></div>"
     )
     st.markdown(html_banner, unsafe_allow_html=True)
 
-def analizar_partidas_pendientes_ia(df_pendientes, tasa_bcv, api_key="", modelo="google/gemini-2.0-flash-001"):
-    if df_pendientes is None or df_pendientes.empty:
-        return "✅ No existen partidas pendientes ni diferencias por auditar."
+if "autenticado" not in st.session_state:
+    st.session_state.autenticado = False
+if "tasa_usd" not in st.session_state:
+    st.session_state.tasa_usd = 45.50
+if "tasa_eur" not in st.session_state:
+    st.session_state.tasa_eur = 48.20
+if "lista_conciliaciones" not in st.session_state:
+    st.session_state.lista_conciliaciones = [
+        {"id": "CONC-001", "fecha": "2026-11-14", "cuenta": "Banco Mercantil - USD/VES", "estado": "Abierta (Retomable)", "movimientos": 5},
+        {"id": "CONC-002", "fecha": "2026-11-10", "cuenta": "Banesco - Corriente", "estado": "Cerrada", "movimientos": 12}
+    ]
+if "overrides_c1_c4" not in st.session_state:
+    st.session_state.overrides_c1_c4 = {}
 
-    df_trabajo = df_pendientes.copy()
-    col_banco = next((c for c in df_trabajo.columns if "banco" in c.lower() and "monto" in c.lower()), None)
-    col_erp = next((c for c in df_trabajo.columns if "erp" in c.lower() and "monto" in c.lower()), None)
-    col_ref = next((c for c in df_trabajo.columns if "ref" in c.lower()), df_trabajo.columns[0])
+if not st.session_state.autenticado:
+    col1, col2, col3 = st.columns([1, 1.4, 1])
+    with col2:
+        st.write("")
+        st.write("")
+        st.markdown("<div style='text-align:center; padding-top: 2rem;'>" + LOGO_TESORIQ_DARK_SVG + "</div>", unsafe_allow_html=True)
+        st.markdown(
+            "<p style='text-align:center; color:#5A6560; font-size:0.95rem; margin-bottom: 2rem;'>Plataforma de Inteligencia y Conciliación Financiera</p>",
+            unsafe_allow_html=True
+        )
+        with st.container(border=True):
+            st.markdown("#### Acceso Corporativo Segregado")
+            usuario_input = st.text_input("Usuario o Correo", placeholder="analista.tesoreria@empresa.com")
+            clave_input = st.text_input("Contraseña", type="password", placeholder="••••••••")
+            st.write("")
+            if st.button("Ingresar a TESORIQ", use_container_width=True):
+                if clave_input.strip() != "":
+                    st.session_state.autenticado = True
+                    st.rerun()
+                else:
+                    st.error("Por favor ingrese su contraseña para continuar.")
+    st.stop()
 
-    if col_banco and col_erp:
-        m_b = pd.to_numeric(df_trabajo[col_banco], errors="coerce").fillna(0.0)
-        m_e = pd.to_numeric(df_trabajo[col_erp], errors="coerce").fillna(0.0)
-        df_trabajo["Diferencia_Absoluta_VES"] = (m_b - m_e).abs().round(2)
-        df_trabajo["Equivalente_USD_BCV"] = (df_trabajo["Diferencia_Absoluta_VES"] / max(float(tasa_bcv), 0.01)).round(2)
-
-    if not api_key or api_key.strip() == "":
-        tasa_txt = "{:.2f}".format(float(tasa_bcv))
-        total_txt = str(len(df_trabajo))
-        cabecera = "*Tasa BCV: **" + tasa_txt + " VES/USD** | Auditadas: **" + total_txt + "** | Integridad: **100% Preservada***"
-        lineas = [
-            "#### 📋 Dictamen de Auditoría Asistida TESORIQ (Motor Local Activo)",
-            cabecera,
-            ""
-        ]
-        for idx, row in df_trabajo.head(15).iterrows():
-            ref_val = str(row.get(col_ref, "Partida-" + str(idx + 1)))
-            dif_ves = str(row.get("Diferencia_Absoluta_VES", "N/A"))
-            dif_usd = str(row.get("Equivalente_USD_BCV", "N/A"))
-            detalle = (
-                "- **Referencia `" + ref_val + "`**: Diferencia Absoluta **" + dif_ves + " VES** "
-                "(*Eq. " + dif_usd + " USD a tasa BCV*) — Verificar retención IVA/ISLR SENIAT, "
-                "comisión bancaria/IGTF o partida en tránsito antes de asentar en el ERP."
-            )
-            lineas.append(detalle)
-        lineas.append("")
-        lineas.append("> 💡 *Ingresa tu API Key de OpenRouter en la barra lateral para redacción generativa avanzada.*")
-        return chr(10).join(lineas)
-
-    muestra = df_trabajo.head(30).to_dict(orient="records")
-    prompt_sys = (
-        "Eres el Auditor Senior de Tesorería de TESORIQ en Venezuela. "
-        "No alteres montos originales. Analiza excepciones en valor absoluto y sugiere asientos."
-    )
-    prompt_usr = (
-        "Tasa BCV: " + "{:.2f}".format(float(tasa_bcv)) + " VES/USD. "
-        "Analiza estas partidas pendientes (causa raíz SENIAT IVA/ISLR, IGTF, comisiones o tránsito) "
-        "y sugiere acción en ERP: " + json.dumps(muestra, default=str, ensure_ascii=False)
-    )
-
-    url = "https://openrouter.ai/api/v1/chat/completions"
-    headers = {
-        "Authorization": "Bearer " + api_key.strip(),
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "model": modelo,
-        "messages": [
-            {"role": "system", "content": prompt_sys},
-            {"role": "user", "content": prompt_usr}
-        ],
-        "temperature": 0.2
-    }
-    try:
-        req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            return data["choices"][0]["message"]["content"]
-    except Exception as e:
-        return "⚠️ Error al consultar OpenRouter: " + str(e)
+def evaluar_reglas_c1_c4(row, tolerancia=0.05):
+    merge = row.get("_merge", "both")
+    dif = row.get("Diferencia_Absoluta_VES", 0.0)
+    if merge == "both":
+        if dif <= tolerancia:
+            return "C1: Conciliado Exacto", "Aprobado Automático"
+        elif dif <= 15.00:
+            return "C2: Diferencia por Redondeo / Céntimos", "Advertencia Leve (Aceptable)"
+        else:
+            return "C3: Posible Retención SENIAT o Comisión Bancaria", "Advertencia Moderada (Requiere Validación)"
+    elif merge == "left_only":
+        return "C4: Pendiente en ERP (Solo en Banco)", "Alerta: Partida No Registrada en Libros"
+    else:
+        return "C4: Pendiente en Banco (Solo en ERP)", "Alerta: Partida en Tránsito o No Efectiva"
 
 def ejecutar_conciliacion(df_b, df_e, tolerancia=0.05):
     b = df_b.copy()
@@ -194,17 +176,26 @@ def ejecutar_conciliacion(df_b, df_e, tolerancia=0.05):
     cruce["Monto_Banco"] = pd.to_numeric(cruce["Monto_Banco"], errors="coerce").fillna(0.0)
     cruce["Monto_ERP"] = pd.to_numeric(cruce["Monto_ERP"], errors="coerce").fillna(0.0)
     cruce["Diferencia_Absoluta_VES"] = (cruce["Monto_Banco"] - cruce["Monto_ERP"]).abs().round(2)
-
-    def clasificar(row):
-        if row["_merge"] == "both":
-            if row["Diferencia_Absoluta_VES"] <= tolerancia:
-                return "Conciliado Exacto"
-            return "Diferencia en Monto"
-        elif row["_merge"] == "left_only":
-            return "Pendiente en ERP (Solo Banco)"
-        return "Pendiente en Banco (Solo ERP)"
-
-    cruce["Estado_Conciliacion"] = cruce.apply(clasificar, axis=1)
+    resultados_reglas = []
+    mensajes_alerta = []
+    for _, r in cruce.iterrows():
+        regla, alerta = evaluar_reglas_c1_c4(r, tolerancia)
+        resultados_reglas.append(regla)
+        mensajes_alerta.append(alerta)
+    cruce["Regla_Aplicada"] = resultados_reglas
+    cruce["Estatus_Alerta"] = mensajes_alerta
+    estados_finales = []
+    for idx, r in cruce.iterrows():
+        ref_key = str(r.get("Referencia_Clean", idx))
+        if ref_key in st.session_state.overrides_c1_c4:
+            estados_finales.append(st.session_state.overrides_c1_c4[ref_key])
+        else:
+            regla_txt = r["Regla_Aplicada"]
+            if "C1" in regla_txt or "C2" in regla_txt:
+                estados_finales.append("Conciliado")
+            else:
+                estados_finales.append("Pendiente por Revisar")
+    cruce["Estado_Conciliacion"] = estados_finales
     return cruce
 
 def generar_datos_demo():
@@ -231,63 +222,12 @@ def tarjeta_kpi_html(titulo, valor, etiqueta):
         "</div>"
     )
 
-def renderizar_seccion_partidas_pendientes(df_pendientes, tasa_bcv=45.50, api_key_default="", modelo_sel="google/gemini-2.0-flash-001"):
-    st.markdown("### ⚠️ Auditoría Inteligente de Partidas Pendientes y Excepciones")
-    if df_pendientes is None or df_pendientes.empty:
-        st.success("🎉 ¡Excelente! No hay partidas pendientes ni diferencias abiertas.")
-        return
-
-    df_vista = df_pendientes.copy()
-    df_vista["Equivalente_USD_BCV"] = (df_vista["Diferencia_Absoluta_VES"] / max(float(tasa_bcv), 0.01)).round(2)
-
-    k1, k2, k3 = st.columns(3)
-    suma_ves = df_vista["Diferencia_Absoluta_VES"].sum()
-    suma_usd = suma_ves / max(float(tasa_bcv), 0.01)
-    with k1:
-        st.markdown(tarjeta_kpi_html("Partidas Abiertas", len(df_vista), "Requieren revisión"), unsafe_allow_html=True)
-    with k2:
-        st.markdown(tarjeta_kpi_html("Discrepancia Total", "{:,.2f} VES".format(suma_ves), "Valor absoluto"), unsafe_allow_html=True)
-    with k3:
-        st.markdown(tarjeta_kpi_html("Equivalente USD", "${:,.2f} USD".format(suma_usd), "Tasa BCV: {:.2f}".format(tasa_bcv)), unsafe_allow_html=True)
-
-    st.dataframe(df_vista, use_container_width=True, hide_index=True)
-
-    col_b1, col_b2 = st.columns([1.2, 1.8])
-    with col_b1:
-        if st.button("🤖 Auditar Partidas Pendientes con IA", use_container_width=True):
-            with st.spinner("Ejecutando análisis contable TESORIQ..."):
-                st.session_state["tesoriq_ultimo_dictamen"] = analizar_partidas_pendientes_ia(
-                    df_vista, tasa_bcv=tasa_bcv, api_key=api_key_default, modelo=modelo_sel
-                )
-    with col_b2:
-        buffer_exc = io.BytesIO()
-        with pd.ExcelWriter(buffer_exc, engine="openpyxl") as writer:
-            df_vista.to_excel(writer, index=False, sheet_name="Partidas_Pendientes")
-        nombre_xlsx = "Partidas_Pendientes_TESORIQ_" + datetime.now().strftime("%Y%m%d") + ".xlsx"
-        st.download_button(
-            label="📥 Exportar Partidas Pendientes (.xlsx)",
-            data=buffer_exc.getvalue(),
-            file_name=nombre_xlsx,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True
-        )
-
-    if st.session_state.get("tesoriq_ultimo_dictamen"):
-        st.markdown("<div class='tesoriq-ia-panel'>" + st.session_state["tesoriq_ultimo_dictamen"] + "</div>", unsafe_allow_html=True)
-
-# ==============================================================================
-# EJECUCIÓN PRINCIPAL
-# ==============================================================================
 aplicar_identidad_tesoriq()
 
 if "df_banco" not in st.session_state:
     st.session_state.df_banco, st.session_state.df_erp = generar_datos_demo()
 if "df_resultado" not in st.session_state:
     st.session_state.df_resultado = ejecutar_conciliacion(st.session_state.df_banco, st.session_state.df_erp)
-if "tasa_bcv" not in st.session_state:
-    st.session_state.tasa_bcv = 45.50
-if "api_key_ia" not in st.session_state:
-    st.session_state.api_key_ia = ""
 
 with st.sidebar:
     renderizar_logo_sidebar()
@@ -298,35 +238,55 @@ with st.sidebar:
             "📊 Dashboard Ejecutivo",
             "📥 Importar Extracto y ERP",
             "🔄 Conciliación y Cruce",
-            "⚠️ Partidas Pendientes (IA)",
-            "🏛️ Tasas BCV y Reglas"
+            "⚠️ Reglas C1-C4 y Excepciones",
+            "🏛️ Tasas Multimoneda (USD / EUR)"
         ],
         label_visibility="collapsed"
     )
-    st.markdown("<div class='sidebar-section'>Parámetros BCV</div>", unsafe_allow_html=True)
-    st.session_state.tasa_bcv = st.number_input("Tasa Oficial BCV (VES/USD)", min_value=1.0, value=float(st.session_state.tasa_bcv), step=0.10)
-    st.markdown("<div class='sidebar-section'>Motor IA (OpenRouter)</div>", unsafe_allow_html=True)
-    st.session_state.api_key_ia = st.text_input("OpenRouter API Key", value=st.session_state.api_key_ia, type="password")
-    modelo_activo = st.selectbox("Modelo Analítico", options=["google/gemini-2.0-flash-001", "openai/gpt-4o-mini", "anthropic/claude-3.5-haiku"])
+    st.markdown("<div class='sidebar-section'>Control de Sesión</div>", unsafe_allow_html=True)
+    if st.button("🔒 Cerrar Sesión", use_container_width=True):
+        st.session_state.autenticado = False
+        st.rerun()
 
 renderizar_banner_tesoriq()
 
 df_res = st.session_state.df_resultado
-conciliados = len(df_res[df_res["Estado_Conciliacion"] == "Conciliado Exacto"])
-diferencias = len(df_res[df_res["Estado_Conciliacion"] == "Diferencia en Monto"])
-abiertas = len(df_res[df_res["Estado_Conciliacion"].str.contains("Pendiente")])
+conciliados = len(df_res[df_res["Estado_Conciliacion"] == "Conciliado"]) if df_res is not None else 0
+pendientes = len(df_res[df_res["Estado_Conciliacion"] == "Pendiente por Revisar"]) if df_res is not None else 0
 
 if menu_activo == "📊 Dashboard Ejecutivo":
     c1, c2, c3, c4 = st.columns(4)
     with c1:
-        st.markdown(tarjeta_kpi_html("Partidas Abiertas", abiertas, "Por revisar"), unsafe_allow_html=True)
+        st.markdown(tarjeta_kpi_html("Partidas Pendientes", pendientes, "Requieren decisión"), unsafe_allow_html=True)
     with c2:
-        st.markdown(tarjeta_kpi_html("Movimientos Conciliados", conciliados, "Match 100%"), unsafe_allow_html=True)
+        st.markdown(tarjeta_kpi_html("Movimientos Conciliados", conciliados, "Aprobados"), unsafe_allow_html=True)
     with c3:
-        st.markdown(tarjeta_kpi_html("Diferencias de Monto", diferencias, "Valor absoluto"), unsafe_allow_html=True)
+        st.markdown(tarjeta_kpi_html("Total Movimientos", len(df_res) if df_res is not None else 0, "Cruce activo"), unsafe_allow_html=True)
     with c4:
-        st.markdown(tarjeta_kpi_html("Tasa BCV Aplicada", "{:.2f}".format(st.session_state.tasa_bcv), "VES / USD"), unsafe_allow_html=True)
-    st.markdown("#### Resumen General de Movimientos")
+        st.markdown(tarjeta_kpi_html("Tasa BCV USD", "{:.2f}".format(st.session_state.tasa_usd), "VES / USD"), unsafe_allow_html=True)
+
+    st.write("")
+    st.markdown("#### 📁 Conciliaciones Recientes (Retomar o Cerrar)")
+    st.caption("Selecciona una conciliación del historial para gestionar su estado operativo.")
+    df_historial = pd.DataFrame(st.session_state.lista_conciliaciones)
+    for i, row in df_historial.iterrows():
+        cols = st.columns([1.5, 2, 2, 1.2, 1.2])
+        cols[0].write(f"**{row['id']}**")
+        cols[1].write(row['fecha'])
+        cols[2].write(row['cuenta'])
+        if "Abierta" in row['estado']:
+            cols[3].markdown(f"<span style='color:#238458; font-weight:650;'>{row['estado']}</span>", unsafe_allow_html=True)
+            if cols[4].button("Cerrar", key=f"cerrar_{i}"):
+                st.session_state.lista_conciliaciones[i]['estado'] = "Cerrada"
+                st.rerun()
+        else:
+            cols[3].markdown(f"<span style='color:#777;'>{row['estado']}</span>", unsafe_allow_html=True)
+            if cols[4].button("Retomar", key=f"retomar_{i}"):
+                st.session_state.lista_conciliaciones[i]['estado'] = "Abierta (Retomable)"
+                st.rerun()
+
+    st.write("")
+    st.markdown("#### Resumen del Cruce Actual")
     st.dataframe(df_res, use_container_width=True, hide_index=True)
 
 elif menu_activo == "📥 Importar Extracto y ERP":
@@ -343,16 +303,49 @@ elif menu_activo == "📥 Importar Extracto y ERP":
             st.success("Mayor ERP actualizado.")
 
 elif menu_activo == "🔄 Conciliación y Cruce":
-    tol = st.slider("Tolerancia por redondeo (VES/USD)", 0.00, 5.00, 0.05, 0.01)
+    tol = st.slider("Tolerancia por redondeo (VES)", 0.00, 5.00, 0.05, 0.01)
     if st.button("🚀 Ejecutar Cruce Inteligente"):
         st.session_state.df_resultado = ejecutar_conciliacion(st.session_state.df_banco, st.session_state.df_erp, tolerancia=tol)
-        st.success("Conciliación completada respetando el 100% de los datos originales.")
+        st.success("Cruce ejecutado aplicando las reglas de negocio C1-C4.")
     st.dataframe(st.session_state.df_resultado, use_container_width=True, hide_index=True)
 
-elif menu_activo == "⚠️ Partidas Pendientes (IA)":
-    df_exc = df_res[df_res["Estado_Conciliacion"] != "Conciliado Exacto"].copy()
-    renderizar_seccion_partidas_pendientes(df_exc, tasa_bcv=st.session_state.tasa_bcv, api_key_default=st.session_state.api_key_ia, modelo_sel=modelo_activo)
+elif menu_activo == "⚠️ Reglas C1-C4 y Excepciones":
+    st.markdown("### ⚠️ Auditoría de Reglas y Decisión Humana (C1 - C4)")
+    st.caption("Inspeccione las advertencias generadas por las reglas del sistema y decida manualmente si desea conciliar la partida (Override) o mantenerla pendiente.")
+    if df_res is not None:
+        for idx, row in df_res.iterrows():
+            ref = str(row.get("Referencia_Clean", "Item-" + str(idx)))
+            regla = str(row.get("Regla_Aplicada", "C1"))
+            alerta = str(row.get("Estatus_Alerta", "Aprobado"))
+            estado_actual = str(row.get("Estado_Conciliacion", "Pendiente"))
+            with st.container(border=True):
+                c_info1, c_info2, c_btn = st.columns([2.5, 2, 1.5])
+                mb = row.get("Monto_Banco", 0)
+                me = row.get("Monto_ERP", 0)
+                c_info1.markdown("**Ref:** `" + ref + "` | **Banco:** " + "{:,.2f}".format(mb) + " | **ERP:** " + "{:,.2f}".format(me))
+                c_info2.markdown("**Regla:** `" + regla + "`\n\n**Estatus:** *" + alerta + "*")
+                is_conciliado = (estado_actual == "Conciliado")
+                if is_conciliado:
+                    c_btn.success("✅ Conciliado")
+                    if c_btn.button("Rechazar / Reabrir", key="reabrir_" + str(idx)):
+                        st.session_state.overrides_c1_c4[ref] = "Pendiente por Revisar"
+                        st.session_state.df_resultado = ejecutar_conciliacion(st.session_state.df_banco, st.session_state.df_erp)
+                        st.rerun()
+                else:
+                    c_btn.warning("⚠️ Pendiente")
+                    if c_btn.button("Forzar Conciliación", key="forzar_" + str(idx)):
+                        st.session_state.overrides_c1_c4[ref] = "Conciliado"
+                        st.session_state.df_resultado = ejecutar_conciliacion(st.session_state.df_banco, st.session_state.df_erp)
+                        st.rerun()
+    else:
+        st.info("Ejecute primero un cruce en el módulo de Conciliación.")
 
-elif menu_activo == "🏛️ Tasas BCV y Reglas":
-    st.write("Tasa Oficial BCV activa:", "{:.2f} VES/USD".format(st.session_state.tasa_bcv))
-    st.write("Regla de Valor Absoluto y validación SENIAT (IVA 75%/100%, ISLR e IGTF 3%) activadas.")
+elif menu_activo == "🏛️ Tasas Multimoneda (USD / EUR)":
+    st.markdown("### Configuración de Tasas de Cambio Oficiales (BCV)")
+    with st.container(border=True):
+        col_t1, col_t2 = st.columns(2)
+        with col_t1:
+            st.session_state.tasa_usd = st.number_input("Tasa Oficial Dólar (USD / VES)", min_value=1.0, value=float(st.session_state.tasa_usd), step=0.10, format="%.2f")
+        with col_t2:
+            st.session_state.tasa_eur = st.number_input("Tasa Oficial Euro (EUR / VES)", min_value=1.0, value=float(st.session_state.tasa_eur), step=0.10, format="%.2f")
+        st.success("Tasas actualizadas. USD: " + "{:.2f}".format(st.session_state.tasa_usd) + " | EUR: " + "{:.2f}".format(st.session_state.tasa_eur))
