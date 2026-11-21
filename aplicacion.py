@@ -11,7 +11,6 @@ Sistema de Conciliación y Tesorería Multidivisa con:
 from __future__ import annotations
 
 import io
-import json
 import os
 import re
 import zipfile
@@ -32,6 +31,10 @@ from conciliar import (
     conciliar,
 )
 from tasas import TablaTasas, TasaNoDisponible
+from seguridad import (
+    inicializar_bd, contar_usuarios, crear_usuario, autenticar, listar_usuarios,
+    cambiar_estado_usuario, guardar_historial, cargar_historial, reemplazar_historial,
+)
 
 # Cliente OpenAI moderno (requiere openai>=1.0.0)
 try:
@@ -48,32 +51,23 @@ st.set_page_config(
     layout="wide",
 )
 
-HISTORIAL_FILE = "historial_conciliaciones.json"
-
-
 def cargar_historial_disco() -> list[dict]:
-    if os.path.exists(HISTORIAL_FILE):
-        try:
-            with open(HISTORIAL_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                return data if isinstance(data, list) else []
-        except Exception:
-            return []
-    return []
+    """Carga exclusivamente los registros del usuario autenticado."""
+    usuario_id = st.session_state.get("usuario_id")
+    return cargar_historial(int(usuario_id)) if usuario_id is not None else []
 
 
 def guardar_lista_historial_disco(historial: list[dict]) -> None:
-    try:
-        with open(HISTORIAL_FILE, "w", encoding="utf-8") as f:
-            json.dump(historial, f, ensure_ascii=False, indent=2, default=str)
-    except Exception:
-        pass
+    """Guarda/reemplaza exclusivamente el historial del usuario autenticado."""
+    usuario_id = st.session_state.get("usuario_id")
+    if usuario_id is not None:
+        reemplazar_historial(int(usuario_id), historial)
 
 
 def guardar_en_historial(resumen_dict: dict) -> None:
-    historial = cargar_historial_disco()
-    historial.insert(0, resumen_dict)
-    guardar_lista_historial_disco(historial)
+    usuario_id = st.session_state.get("usuario_id")
+    if usuario_id is not None:
+        guardar_historial(int(usuario_id), resumen_dict)
 
 
 def serializar_movimiento(m: Movimiento) -> dict:
@@ -167,6 +161,17 @@ _PATRON_PARAFISCAL_IMPUESTO = re.compile(
     r"\b(i\.?v\.?s\.?s|f\.?a\.?o\.?v|inces|seniat|insai|igtf|impuesto\w*|retencion\w*|alcaldia)\b",
     re.IGNORECASE,
 )
+_PATRON_COMISION_FINANCIERA = re.compile(
+    r"\b(interes\w*|financiamient\w*|sobregir\w*|prestam\w*|credito\w*|mora\w*|"
+    r"comision\w*\s+(?:por\s+)?(?:financiamient\w*|prestam\w*|credito\w*|mora\w*))\b",
+    re.IGNORECASE,
+)
+_PATRON_COMISION_BANCARIA = re.compile(
+    r"\b(comision\w*|mantenimient\w*|cargo\w*\s+bancari\w*|transferencia\w*|"
+    r"chequera|emision\w*\s+de\s+cheque|swift|servicio\w*\s+bancari\w*|"
+    r"punto\s+de\s+venta|pos|taquilla|operacion\w*\s+bancari\w*)\b",
+    re.IGNORECASE,
+)
 
 
 def clasificar_naturaleza_contable(desc_mayor: str, desc_banco: str, monto_mayor: float, monto_banco: float, marca: str) -> str:
@@ -187,6 +192,10 @@ def clasificar_naturaleza_contable(desc_mayor: str, desc_banco: str, monto_mayor
     elif monto < 0:
         if _PATRON_BANCOS_PROPIOS.search(texto):
             return "Egreso por Transferencia entre Cuentas Propias"
+        if _PATRON_COMISION_FINANCIERA.search(texto):
+            return "Egreso Financiero - Comisiones e Intereses"
+        if _PATRON_COMISION_BANCARIA.search(texto):
+            return "Egreso Bancario - Comisiones y Servicios"
         if _PATRON_ANTICIPO_VENTAS.search(texto):
             return "Egreso - Anticipos y Viáticos de Ventas"
         if _PATRON_NOMINA.search(texto):
@@ -1031,6 +1040,26 @@ st.markdown(
             text-transform: uppercase;
             margin: 12px 0 6px 0 !important;
         }
+
+        /* Contraste consistente en textos, etiquetas, controles y tablas */
+        .stApp, .stApp p, .stApp span, .stApp label,
+        .stApp [data-testid="stMarkdownContainer"],
+        .stApp [data-testid="stWidgetLabel"] p { color: #171A18; }
+        .stTextInput input, .stNumberInput input, .stDateInput input,
+        .stSelectbox div[data-baseweb="select"] > div,
+        .stMultiSelect div[data-baseweb="select"] > div,
+        .stTextArea textarea {
+            color: #171A18 !important; background-color: #FFFFFF !important;
+            border-color: #94A3B8 !important;
+        }
+        .stDataFrame, .stDataEditor { color: #171A18 !important; }
+        [data-testid="stDataFrame"] *, [data-testid="stDataEditor"] * {
+            color: #171A18;
+        }
+        .stCaption, [data-testid="stCaptionContainer"] { color: #475569 !important; }
+        .stAlert p, .stAlert span { color: #171A18 !important; }
+        section[data-testid="stSidebar"] p, section[data-testid="stSidebar"] span,
+        section[data-testid="stSidebar"] label { color: #171A18 !important; }
     </style>
 """,
     unsafe_allow_html=True,
@@ -1060,24 +1089,63 @@ def render_kpi_card(etiqueta: str, valor: object) -> None:
 
 
 # =============================================================================
-# 4. GESTIÓN DE ESTADO Y SEGURIDAD (AUTENTICACIÓN)
+# 4. GESTIÓN DE ESTADO Y SEGURIDAD (CUENTAS INDIVIDUALES)
 # =============================================================================
-if "autenticado" not in st.session_state:
-    st.session_state.autenticado = False
+inicializar_bd()
 
-if not st.session_state.autenticado:
-    render_banner("✨ TESORIQ", "Plataforma de Inteligencia Financiera")
-    st.markdown("Por favor, ingrese su contraseña para continuar.")
+# La primera ejecución crea el administrador desde una pantalla de configuración.
+if contar_usuarios() == 0:
+    render_banner("TESORIQ", "Configuración inicial de seguridad")
+    st.info("Crea la cuenta administradora. Desde ella podrás registrar al menos 10 usuarios independientes.")
+    with st.form("form_admin_inicial"):
+        admin_nombre = st.text_input("Nombre del administrador")
+        admin_usuario = st.text_input("Usuario administrador")
+        admin_password = st.text_input("Contraseña (mínimo 10 caracteres)", type="password")
+        admin_password_2 = st.text_input("Confirmar contraseña", type="password")
+        crear_admin = st.form_submit_button("Crear administrador", type="primary")
+    if crear_admin:
+        if admin_password != admin_password_2:
+            st.error("Las contraseñas no coinciden.")
+        else:
+            ok, mensaje = crear_usuario(admin_usuario, admin_nombre, admin_password, "admin")
+            if ok:
+                st.success("Administrador creado. Inicia sesión para continuar.")
+                st.rerun()
+            else:
+                st.error(mensaje)
+    st.stop()
 
-    password_correcta = st.secrets.get("PASSWORD_ACCESO", "admin123")
-    password = st.text_input("Contraseña:", type="password")
+# Caducidad por inactividad: 30 minutos. Se renueva con cada interacción/rerun.
+AHORA_TS = datetime.now().timestamp()
+if st.session_state.get("autenticado"):
+    ultima_actividad = float(st.session_state.get("ultima_actividad", AHORA_TS))
+    if AHORA_TS - ultima_actividad > 1800:
+        for clave in list(st.session_state.keys()):
+            del st.session_state[clave]
+        st.warning("Tu sesión se cerró por 30 minutos de inactividad. Ingresa nuevamente.")
+        st.stop()
+    st.session_state.ultima_actividad = AHORA_TS
 
-    if st.button("🔑 Ingresar a TESORIQ", type="primary"):
-        if password and password == password_correcta:
+if not st.session_state.get("autenticado", False):
+    render_banner("TESORIQ", "Tus finanzas. Más inteligentes.")
+    st.markdown("### Acceso seguro a tu espacio financiero")
+    with st.form("form_login_tesoriq"):
+        login_usuario = st.text_input("Usuario")
+        login_password = st.text_input("Contraseña", type="password")
+        entrar = st.form_submit_button("Ingresar a TESORIQ", type="primary", use_container_width=True)
+    if entrar:
+        usuario = autenticar(login_usuario, login_password)
+        if usuario:
             st.session_state.autenticado = True
+            st.session_state.usuario_id = usuario["id"]
+            st.session_state.usuario = usuario["username"]
+            st.session_state.nombre_usuario = usuario["nombre"]
+            st.session_state.rol_usuario = usuario["rol"]
+            st.session_state.ultima_actividad = datetime.now().timestamp()
             st.rerun()
         else:
-            st.error("Contraseña incorrecta. Intente nuevamente.")
+            st.error("Usuario o contraseña incorrectos, o cuenta inactiva.")
+    st.caption("Cada cuenta dispone de un historial de conciliaciones independiente.")
     st.stop()
 
 if "tabla_tasas" not in st.session_state:
@@ -1132,10 +1200,11 @@ with st.sidebar:
     st.markdown(
         '<div class="sidebar-brand">'
         '<svg width="100%" height="92" viewBox="0 0 300 92" role="img" aria-label="TESORIQ" xmlns="http://www.w3.org/2000/svg">'
-        '<g transform="translate(8 5)">'
-        '<path d="M13 15 C17 5 45 2 58 9 C70 15 73 38 66 49 C60 59 35 62 22 55 C10 48 7 27 13 15 Z" fill="#238458"/>'
-        '<path d="M79 9 C93 2 120 5 125 15 C131 27 128 48 116 55 C103 62 79 59 73 49 C66 38 67 15 79 9 Z" fill="#8CE0B5"/>'
-        '<path d="M69 57 C78 64 91 76 91 88 L91 90 L78 90 L78 74 C64 65 52 53 54 40 C56 29 66 23 69 22 C73 24 84 34 85 45 C86 50 79 56 69 57 Z" fill="#10251D"/>'
+        '<g transform="translate(8 3)">'
+        '<path d="M67 9 C52 -2 32 8 37 27 C41 42 58 48 68 56 C79 45 94 37 96 22 C98 5 80 0 67 9 Z" fill="#238458"/>'
+        '<path d="M38 29 C21 17 5 29 12 47 C18 62 39 65 57 60 C57 47 50 36 38 29 Z" fill="#8CE0B5"/>'
+        '<path d="M96 29 C113 17 129 29 122 47 C116 62 95 65 77 60 C77 47 84 36 96 29 Z" fill="#238458"/>'
+        '<path d="M68 53 C70 67 63 78 51 89 L64 89 C75 78 79 67 76 54 Z" fill="#8CE0B5"/>'
         '</g>'
         '<text x="151" y="47" fill="#FFFFFF" font-family="Manrope, Inter, Arial, sans-serif" font-size="29" font-weight="800" letter-spacing="1.2">TESORIQ</text>'
         '<text x="152" y="68" fill="#8CE0B5" font-family="Inter, Arial, sans-serif" font-size="10.5" font-weight="500" letter-spacing="0.35">Tus finanzas. Más inteligentes.</text>'
@@ -1150,14 +1219,17 @@ with st.sidebar:
     )
     menu_proceso = st.radio(
         "Proceso",
-        [
+        ([
             "Dashboard",
             "Importar",
             "Conciliación",
             "Reglas",
             "Partidas pendientes",
             "Historial",
-        ],
+            "Usuarios",
+        ] if st.session_state.get("rol_usuario") == "admin" else [
+            "Dashboard", "Importar", "Conciliación", "Reglas", "Partidas pendientes", "Historial"
+        ]),
         key="menu_proceso",
         label_visibility="collapsed",
     )
@@ -1185,12 +1257,50 @@ with st.sidebar:
     )
 
     st.markdown("---")
-    st.caption("Soporte técnico • Configuración")
+    st.caption(f"Sesión: {st.session_state.get('nombre_usuario', st.session_state.get('usuario', 'Usuario'))}")
+    st.caption(f"Perfil: {st.session_state.get('rol_usuario', 'usuario').capitalize()}")
+    if st.button("Cerrar sesión", use_container_width=True):
+        for clave in list(st.session_state.keys()):
+            del st.session_state[clave]
+        st.rerun()
 
 
 # =============================================================================
 # 6. MÓDULOS Y VISTAS DE LA APLICACIÓN
 # =============================================================================
+
+if menu_proceso == "Usuarios" and st.session_state.get("rol_usuario") == "admin":
+    render_banner("Administración de usuarios", "Crea, consulta y desactiva cuentas individuales de TESORIQ.")
+    st.caption("La aplicación admite 10 usuarios como capacidad inicial y no impone un límite rígido.")
+    with st.container(border=True):
+        st.markdown("### Crear nuevo usuario")
+        with st.form("crear_usuario_form"):
+            nuevo_nombre = st.text_input("Nombre completo")
+            nuevo_usuario = st.text_input("Nombre de usuario")
+            nueva_password = st.text_input("Contraseña (mínimo 10 caracteres)", type="password")
+            nueva_password_2 = st.text_input("Confirmar contraseña", type="password")
+            nuevo_rol = st.selectbox("Perfil", ["usuario", "admin"])
+            crear = st.form_submit_button("Crear cuenta", type="primary")
+        if crear:
+            if nueva_password != nueva_password_2:
+                st.error("Las contraseñas no coinciden.")
+            else:
+                ok, mensaje = crear_usuario(nuevo_usuario, nuevo_nombre, nueva_password, nuevo_rol)
+                (st.success if ok else st.error)(mensaje)
+    st.markdown("### Usuarios registrados")
+    usuarios_df = pd.DataFrame(listar_usuarios())
+    if not usuarios_df.empty:
+        usuarios_df["estado"] = usuarios_df["activo"].map({1: "Activo", 0: "Inactivo"})
+        st.dataframe(usuarios_df[["id", "username", "nombre", "rol", "estado", "creado_en"]], use_container_width=True, hide_index=True)
+        opciones_ids = [int(x) for x in usuarios_df["id"].tolist() if int(x) != int(st.session_state.usuario_id)]
+        if opciones_ids:
+            id_estado = st.selectbox("Cuenta a activar/desactivar", opciones_ids, format_func=lambda x: next((f"{r['username']} — {r['nombre']}" for r in listar_usuarios() if int(r["id"]) == x), str(x)))
+            estado_actual = next((bool(r["activo"]) for r in listar_usuarios() if int(r["id"]) == id_estado), True)
+            if st.button("Desactivar cuenta" if estado_actual else "Activar cuenta"):
+                if cambiar_estado_usuario(id_estado, not estado_actual, int(st.session_state.usuario_id)):
+                    st.success("Estado de la cuenta actualizado.")
+                    st.rerun()
+    st.stop()
 
 if modulo_analisis == "Gestión de Tasas BCV / Multidivisa":
     render_banner(
@@ -1439,16 +1549,40 @@ elif menu_proceso == "Importar":
             cta_sel_imp = st.selectbox("Cuenta bancaria", ctas_disp if ctas_disp else ["Cuenta Principal"])
 
     with st.container(border=True):
-        st.markdown("#### 2. Período y Saldos de Control (Opcional)")
-        cp1, cp2, cp3, cp4 = st.columns(4)
+        st.markdown("#### 2. Período y verificación de saldos iniciales")
+        cp1, cp2 = st.columns(2)
         with cp1:
             st.date_input("Período desde", value=None, key="imp_fecha_desde")
         with cp2:
             st.date_input("Período hasta", value=None, key="imp_fecha_hasta")
-        with cp3:
-            st.number_input("Saldo inicial (VES)", value=0.0, step=100.0, format="%.2f", key="imp_saldo_ini")
-        with cp4:
-            st.number_input("Saldo final (VES)", value=0.0, step=100.0, format="%.2f", key="imp_saldo_fin")
+        verificar_saldos = st.checkbox(
+            "Verificar que el saldo inicial del banco coincida con el saldo inicial del mayor",
+            value=st.session_state.get("verificar_saldos_iniciales", False),
+            key="verificar_saldos_iniciales",
+            help="Es opcional. Si se activa, TESORIQ compara ambos saldos y muestra la diferencia."
+        )
+        if verificar_saldos:
+            cs1, cs2, cs3 = st.columns(3)
+            with cs1:
+                saldo_ini_banco = st.number_input("Saldo inicial según banco (VES)", value=0.0, step=100.0, format="%.2f", key="saldo_ini_banco")
+            with cs2:
+                saldo_ini_mayor = st.number_input("Saldo inicial según mayor (VES)", value=0.0, step=100.0, format="%.2f", key="saldo_ini_mayor")
+            with cs3:
+                tolerancia_saldo = st.number_input("Tolerancia permitida (VES)", min_value=0.0, value=0.01, step=0.01, format="%.2f", key="tolerancia_saldo_ini")
+            confirmar_saldos = st.checkbox("Confirmo que los dos saldos iniciales fueron capturados correctamente", key="confirmar_captura_saldos")
+            if confirmar_saldos:
+                diferencia_saldos = round(float(saldo_ini_banco) - float(saldo_ini_mayor), 2)
+                if abs(diferencia_saldos) <= float(tolerancia_saldo):
+                    st.success(f"Saldos iniciales verificados. Diferencia: {diferencia_saldos:,.2f} VES")
+                    st.session_state.resultado_verificacion_saldos = {"verificado": True, "banco": float(saldo_ini_banco), "mayor": float(saldo_ini_mayor), "diferencia": diferencia_saldos}
+                else:
+                    st.warning(f"Los saldos iniciales no coinciden. Diferencia banco - mayor: {diferencia_saldos:,.2f} VES. Puedes continuar, pero revisa el descuadre.")
+                    st.session_state.resultado_verificacion_saldos = {"verificado": False, "banco": float(saldo_ini_banco), "mayor": float(saldo_ini_mayor), "diferencia": diferencia_saldos}
+            else:
+                st.info("Ingresa ambos saldos y confirma la captura para ejecutar la comparación.")
+                st.session_state.resultado_verificacion_saldos = {"pendiente_confirmacion": True}
+        else:
+            st.session_state.resultado_verificacion_saldos = {"omitido": True}
 
     with st.container(border=True):
         st.markdown("#### 3. Seleccione el archivo (Excel o CSV)")
@@ -1664,6 +1798,7 @@ elif menu_proceso == "Conciliación":
                         "movs_libros_raw": [serializar_movimiento(m) for m in st.session_state.movs_libros],
                         "pregunta_ia": st.session_state.ultima_pregunta_ia,
                         "analisis_ia": st.session_state.ultimo_analisis_ia,
+                        "verificacion_saldos_iniciales": st.session_state.get("resultado_verificacion_saldos", {"omitido": True}),
                     }
                     guardar_en_historial(registro_historial)
                     st.success("🎉 ¡Conciliación completa guardada! Puede ver su consolidado o editarla cuando quiera en el menú 'Historial' o desde el 'Dashboard'.")
@@ -1982,6 +2117,28 @@ elif menu_proceso == "Historial":
                             "Asiento Anulado",
                         ],
                         required=True,
+                    ),
+                    "Naturaleza Contable": st.column_config.SelectboxColumn(
+                        "Naturaleza Contable",
+                        options=[
+                            "Egreso Financiero - Comisiones e Intereses",
+                            "Egreso Bancario - Comisiones y Servicios",
+                            "Egreso - Pagos a Proveedores y Operativos",
+                            "Egreso - Impuestos y Parafiscales",
+                            "Egreso - Nómina y Personal",
+                            "Egreso - Anticipos y Viáticos de Ventas",
+                            "Egreso - Cuentas por Cobrar Accionistas / Personal",
+                            "Egreso - Impuestos y Parafiscales",
+                            "Egreso por Transferencia entre Cuentas Propias",
+                            "Egreso - Pagos a Proveedores y Operativos",
+                            "Ingreso Bancario / Intereses",
+                            "Ingreso por Ventas / Cobranza a Clientes",
+                            "Ingreso por Transferencia entre Cuentas Propias",
+                            "Ingreso por Devolución / Reintegro",
+                            "Sin monto",
+                            "Asiento Anulado (Neutralizado)",
+                        ],
+                        required=False,
                     ),
                 },
             )
