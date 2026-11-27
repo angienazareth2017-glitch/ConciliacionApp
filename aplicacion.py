@@ -19,7 +19,9 @@ from decimal import Decimal
 from xml.sax.saxutils import escape as xml_escape
 
 import pandas as pd
+import psycopg
 import streamlit as st
+from streamlit.errors import StreamlitSecretNotFoundError
 
 # Importación de motores lógicos locales
 from conciliar import (
@@ -32,8 +34,9 @@ from conciliar import (
 )
 from tasas import TablaTasas, TasaNoDisponible
 from seguridad import (
-    inicializar_bd, contar_usuarios, crear_usuario, autenticar, listar_usuarios,
-    cambiar_estado_usuario, guardar_historial, cargar_historial, reemplazar_historial,
+    conectar, obtener_usuario, crear_usuario, autenticar, listar_usuarios,
+    cambiar_estado_usuario, guardar_historial, cargar_historial, eliminar_historial,
+    actualizar_historial,
 )
 
 # Cliente OpenAI moderno (requiere openai>=1.0.0)
@@ -51,23 +54,29 @@ st.set_page_config(
     layout="wide",
 )
 
+def operar_bd(operacion, *args):
+    dsn = os.environ.get("TESORIQ_DATABASE_URL")
+    if not dsn:
+        try:
+            dsn = st.secrets.get("TESORIQ_DATABASE_URL")
+        except StreamlitSecretNotFoundError:
+            pass
+    if dsn:
+        try:
+            with conectar(dsn) as conn:
+                return operacion(conn, *args)
+        except (psycopg.Error, ValueError):
+            pass
+    st.error("El servicio de TESORIQ no está disponible en este momento. Contacta con soporte.")
+    st.stop()
+
+
 def cargar_historial_disco() -> list[dict]:
-    """Carga exclusivamente los registros del usuario autenticado."""
-    usuario_id = st.session_state.get("usuario_id")
-    return cargar_historial(int(usuario_id)) if usuario_id is not None else []
-
-
-def guardar_lista_historial_disco(historial: list[dict]) -> None:
-    """Guarda/reemplaza exclusivamente el historial del usuario autenticado."""
-    usuario_id = st.session_state.get("usuario_id")
-    if usuario_id is not None:
-        reemplazar_historial(int(usuario_id), historial)
+    return operar_bd(cargar_historial, st.session_state.usuario_id)
 
 
 def guardar_en_historial(resumen_dict: dict) -> None:
-    usuario_id = st.session_state.get("usuario_id")
-    if usuario_id is not None:
-        guardar_historial(int(usuario_id), resumen_dict)
+    operar_bd(guardar_historial, st.session_state.usuario_id, resumen_dict)
 
 
 def serializar_movimiento(m: Movimiento) -> dict:
@@ -843,114 +852,25 @@ def construir_contexto_ia_real(df_rep: pd.DataFrame, res) -> str:
 st.markdown(
     """
     <style>
-        /* Fondo general claro y texto negro nítido */
-        .stApp {
-            background-color: #F4F6F4;
-            color: #171A18;
+        button[kind="primary"],
+        button[data-testid="stBaseButton-primary"],
+        button[data-testid="stBaseButton-primaryFormSubmit"] {
+            background-color: #10251D;
+            border-color: #10251D;
+            color: #FFFFFF;
         }
 
-        /* Títulos de sección en Verde Bosque y Negro con tamaño apropiado */
-        h1 {
-            color: #10251D !important;
-            font-size: 32px !important;
-            font-weight: 800 !important;
-        }
-        h2 {
-            color: #10251D !important;
-            font-size: 25px !important;
-            font-weight: 700 !important;
-        }
-        h3 {
-            color: #171A18 !important;
-            font-size: 21px !important;
-            font-weight: 700 !important;
-        }
-        h4 {
-            color: #10251D !important;
-            font-size: 18px !important;
-            font-weight: 700 !important;
-        }
-
-        /* Tarjetas blancas con borde definido y sombra elegante */
-        div[data-testid="stVerticalBlockBorderWrapper"] {
-            background-color: #FFFFFF;
-            border-radius: 12px;
-            border: 1.5px solid #CBD5E1;
-            box-shadow: 0 4px 12px rgba(16, 37, 29, 0.06);
-            padding: 18px;
-            margin-bottom: 14px;
-        }
-
-        /* Barra lateral (Sidebar) con contraste limpio */
-        section[data-testid="stSidebar"] {
-            background-color: #FFFFFF;
-            border-right: 2px solid #E2E8F0;
-        }
-        section[data-testid="stSidebar"] .stRadio label p {
-            font-size: 16px !important;
-            font-weight: 600 !important;
-            color: #171A18 !important;
-        }
-
-        /* Botones principales y secundarios en Verde Bosque */
-        .stButton button[kind="primary"] {
-            background-color: #10251D !important;
-            color: #FFFFFF !important;
-            border: 1.5px solid #10251D !important;
-            border-radius: 10px !important;
-            font-size: 16px !important;
-            font-weight: 700 !important;
-            padding: 0.55rem 1.2rem !important;
-            box-shadow: 0 2px 6px rgba(16, 37, 29, 0.20);
-        }
-        .stButton button[kind="primary"] p,
-        .stButton button[kind="primary"] span {
-            color: #FFFFFF !important;
-            font-size: 16px !important;
-            font-weight: 700 !important;
-        }
-        .stButton button[kind="primary"]:hover {
-            background-color: #238458 !important;
-            border-color: #238458 !important;
-        }
-        .stButton button[kind="secondary"] {
-            background-color: #FFFFFF !important;
-            color: #10251D !important;
-            border: 1.5px solid #10251D !important;
-            border-radius: 10px !important;
-            font-size: 15px !important;
-            font-weight: 700 !important;
-            padding: 0.5rem 1rem !important;
-        }
-        .stButton button[kind="secondary"] p,
-        .stButton button[kind="secondary"] span {
-            color: #10251D !important;
-            font-size: 15px !important;
-            font-weight: 700 !important;
-        }
-        .stButton button[kind="secondary"]:hover {
-            background-color: #E8F5EE !important;
-        }
-
-        /* Botones de descarga en Verde Bosque */
-        .stDownloadButton button {
-            background-color: #10251D !important;
-            color: #FFFFFF !important;
-            border-radius: 10px !important;
-            font-size: 15px !important;
-            font-weight: 700 !important;
-            border: none !important;
-        }
-        .stDownloadButton button p,
-        .stDownloadButton button span {
-            color: #FFFFFF !important;
-            font-size: 15px !important;
-            font-weight: 700 !important;
+        button[kind="primary"]:hover,
+        button[data-testid="stBaseButton-primary"]:hover,
+        button[data-testid="stBaseButton-primaryFormSubmit"]:hover {
+            background-color: #238458;
+            border-color: #238458;
+            color: #FFFFFF;
         }
 
         /* Banner Superior Verde Bosque Corporativo */
         .tesoriq-banner {
-            background: linear-gradient(135deg, #10251D 0%, #174A35 60%, #238458 100%);
+            background: linear-gradient(135deg, #10251D, #174A35);
             padding: 28px 32px;
             border-radius: 14px;
             margin-bottom: 24px;
@@ -960,6 +880,7 @@ st.markdown(
         .tesoriq-banner .tesoriq-banner-title,
         .tesoriq-banner .tesoriq-banner-title * {
             color: #FFFFFF !important;
+            font-family: Manrope, Inter, sans-serif;
             font-size: 32px !important;
             font-weight: 800 !important;
             line-height: 1.25 !important;
@@ -1005,26 +926,9 @@ st.markdown(
             display: block;
         }
 
-        /* Respaldo para st.metric nativos */
-        div[data-testid="stMetricValue"],
-        div[data-testid="stMetricValue"] > div,
-        div[data-testid="stMetricValue"] p {
-            color: #10251D !important;
-            font-size: 36px !important;
-            font-weight: 800 !important;
-        }
-        div[data-testid="stMetricLabel"] p,
-        div[data-testid="stMetricLabel"] label {
-            color: #171A18 !important;
-            font-size: 17px !important;
-            font-weight: 700 !important;
-        }
-
-        @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&display=swap');
-
         /* Identidad visual corporativa TESORIQ en la barra lateral */
         .sidebar-brand {
-            background: linear-gradient(135deg, #10251D 0%, #174A35 55%, #238458 100%);
+            background: linear-gradient(135deg, #10251D, #174A35);
             padding: 20px 16px;
             border-radius: 18px;
             margin-bottom: 18px;
@@ -1034,32 +938,12 @@ st.markdown(
         }
         .sidebar-section-label {
             font-size: 13px !important;
-            color: #10251D !important;
             font-weight: 800 !important;
             letter-spacing: 0.8px;
             text-transform: uppercase;
             margin: 12px 0 6px 0 !important;
         }
 
-        /* Contraste consistente en textos, etiquetas, controles y tablas */
-        .stApp, .stApp p, .stApp span, .stApp label,
-        .stApp [data-testid="stMarkdownContainer"],
-        .stApp [data-testid="stWidgetLabel"] p { color: #171A18; }
-        .stTextInput input, .stNumberInput input, .stDateInput input,
-        .stSelectbox div[data-baseweb="select"] > div,
-        .stMultiSelect div[data-baseweb="select"] > div,
-        .stTextArea textarea {
-            color: #171A18 !important; background-color: #FFFFFF !important;
-            border-color: #94A3B8 !important;
-        }
-        .stDataFrame, .stDataEditor { color: #171A18 !important; }
-        [data-testid="stDataFrame"] *, [data-testid="stDataEditor"] * {
-            color: #171A18;
-        }
-        .stCaption, [data-testid="stCaptionContainer"] { color: #475569 !important; }
-        .stAlert p, .stAlert span { color: #171A18 !important; }
-        section[data-testid="stSidebar"] p, section[data-testid="stSidebar"] span,
-        section[data-testid="stSidebar"] label { color: #171A18 !important; }
     </style>
 """,
     unsafe_allow_html=True,
@@ -1091,30 +975,6 @@ def render_kpi_card(etiqueta: str, valor: object) -> None:
 # =============================================================================
 # 4. GESTIÓN DE ESTADO Y SEGURIDAD (CUENTAS INDIVIDUALES)
 # =============================================================================
-inicializar_bd()
-
-# La primera ejecución crea el administrador desde una pantalla de configuración.
-if contar_usuarios() == 0:
-    render_banner("TESORIQ", "Configuración inicial de seguridad")
-    st.info("Crea la cuenta administradora. Desde ella podrás registrar al menos 10 usuarios independientes.")
-    with st.form("form_admin_inicial"):
-        admin_nombre = st.text_input("Nombre del administrador")
-        admin_usuario = st.text_input("Usuario administrador")
-        admin_password = st.text_input("Contraseña (mínimo 10 caracteres)", type="password")
-        admin_password_2 = st.text_input("Confirmar contraseña", type="password")
-        crear_admin = st.form_submit_button("Crear administrador", type="primary")
-    if crear_admin:
-        if admin_password != admin_password_2:
-            st.error("Las contraseñas no coinciden.")
-        else:
-            ok, mensaje = crear_usuario(admin_usuario, admin_nombre, admin_password, "admin")
-            if ok:
-                st.success("Administrador creado. Inicia sesión para continuar.")
-                st.rerun()
-            else:
-                st.error(mensaje)
-    st.stop()
-
 # Caducidad por inactividad: 30 minutos. Se renueva con cada interacción/rerun.
 AHORA_TS = datetime.now().timestamp()
 if st.session_state.get("autenticado"):
@@ -1124,6 +984,11 @@ if st.session_state.get("autenticado"):
             del st.session_state[clave]
         st.warning("Tu sesión se cerró por 30 minutos de inactividad. Ingresa nuevamente.")
         st.stop()
+    usuario_vigente = operar_bd(obtener_usuario, st.session_state.usuario_id)
+    if usuario_vigente is None:
+        st.session_state.clear()
+        st.rerun()
+    st.session_state.rol_usuario = usuario_vigente["rol"]
     st.session_state.ultima_actividad = AHORA_TS
 
 if not st.session_state.get("autenticado", False):
@@ -1134,7 +999,7 @@ if not st.session_state.get("autenticado", False):
         login_password = st.text_input("Contraseña", type="password")
         entrar = st.form_submit_button("Ingresar a TESORIQ", type="primary", use_container_width=True)
     if entrar:
-        usuario = autenticar(login_usuario, login_password)
+        usuario = operar_bd(autenticar, login_usuario, login_password)
         if usuario:
             st.session_state.autenticado = True
             st.session_state.usuario_id = usuario["id"]
@@ -1285,19 +1150,20 @@ if menu_proceso == "Usuarios" and st.session_state.get("rol_usuario") == "admin"
             if nueva_password != nueva_password_2:
                 st.error("Las contraseñas no coinciden.")
             else:
-                ok, mensaje = crear_usuario(nuevo_usuario, nuevo_nombre, nueva_password, nuevo_rol)
+                ok, mensaje = operar_bd(crear_usuario, nuevo_usuario, nuevo_nombre, nueva_password, nuevo_rol)
                 (st.success if ok else st.error)(mensaje)
     st.markdown("### Usuarios registrados")
-    usuarios_df = pd.DataFrame(listar_usuarios())
+    usuarios = operar_bd(listar_usuarios)
+    usuarios_df = pd.DataFrame(usuarios)
     if not usuarios_df.empty:
         usuarios_df["estado"] = usuarios_df["activo"].map({1: "Activo", 0: "Inactivo"})
         st.dataframe(usuarios_df[["id", "username", "nombre", "rol", "estado", "creado_en"]], use_container_width=True, hide_index=True)
         opciones_ids = [int(x) for x in usuarios_df["id"].tolist() if int(x) != int(st.session_state.usuario_id)]
         if opciones_ids:
-            id_estado = st.selectbox("Cuenta a activar/desactivar", opciones_ids, format_func=lambda x: next((f"{r['username']} — {r['nombre']}" for r in listar_usuarios() if int(r["id"]) == x), str(x)))
-            estado_actual = next((bool(r["activo"]) for r in listar_usuarios() if int(r["id"]) == id_estado), True)
+            id_estado = st.selectbox("Cuenta a activar/desactivar", opciones_ids, format_func=lambda x: next((f"{r['username']} — {r['nombre']}" for r in usuarios if int(r["id"]) == x), str(x)))
+            estado_actual = next((bool(r["activo"]) for r in usuarios if int(r["id"]) == id_estado), True)
             if st.button("Desactivar cuenta" if estado_actual else "Activar cuenta"):
-                if cambiar_estado_usuario(id_estado, not estado_actual, int(st.session_state.usuario_id)):
+                if operar_bd(cambiar_estado_usuario, id_estado, not estado_actual, st.session_state.usuario_id):
                     st.success("Estado de la cuenta actualizado.")
                     st.rerun()
     st.stop()
@@ -1458,7 +1324,7 @@ elif menu_proceso == "Dashboard":
                     with c_info:
                         st.markdown(
                             f"**{etiqueta_h}** ({fecha_h})  \n"
-                            f"<span style='color:#64748B; font-size:13px;'>"
+                            f"<span style='font-size:13px;'>"
                             f"Conciliados: {reg_h.get('pares_cerrados', 0)} • "
                             f"Pend. Banco: {reg_h.get('banco_pendiente', 0)} • "
                             f"Pend. Libros: {reg_h.get('libros_pendiente', 0)} • "
@@ -1590,7 +1456,10 @@ elif menu_proceso == "Importar":
 
     if archivo_subido is not None:
         try:
-            df_imp = pd.read_excel(archivo_subido)
+            if archivo_subido.name.lower().endswith(".csv"):
+                df_imp = pd.read_csv(archivo_subido, sep=None, engine="python", encoding="utf-8-sig")
+            else:
+                df_imp = pd.read_excel(archivo_subido)
             st.write("🔍 **Vista previa de los datos:**")
             st.dataframe(df_imp.head())
 
@@ -1785,7 +1654,6 @@ elif menu_proceso == "Conciliación":
                 st.write("")
                 if st.button("💾 Guardar en Historial", type="primary", use_container_width=True):
                     registro_historial = {
-                        "id_cierre": datetime.now().strftime("%Y%m%d%H%M%S"),
                         "etiqueta": etiqueta_cierre.strip() or f"Conciliación {datetime.now().strftime('%Y-%m-%d')}",
                         "fecha_cierre": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         "tolerancia_c2": tolerancia_c2,
@@ -2083,8 +1951,7 @@ elif menu_proceso == "Historial":
                 )
             with col_acc3:
                 if st.button("🗑️ Eliminar este registro del Historial", use_container_width=True):
-                    historial_disco.pop(seleccion)
-                    guardar_lista_historial_disco(historial_disco)
+                    operar_bd(eliminar_historial, st.session_state.usuario_id, reg_sel["id_cierre"])
                     st.success("Registro eliminado del historial.")
                     st.rerun()
 
@@ -2155,7 +2022,9 @@ elif menu_proceso == "Historial":
                     historial_disco[seleccion]["banco_pendiente"] = int((marcas_s == "Por conciliar (Banco)").sum())
                     historial_disco[seleccion]["libros_pendiente"] = int((marcas_s == "Por conciliar (Libros)").sum())
                     historial_disco[seleccion]["libros_anulados"] = int((marcas_s == "Asiento Anulado").sum())
-                    guardar_lista_historial_disco(historial_disco)
+                    if not operar_bd(actualizar_historial, st.session_state.usuario_id, reg_sel):
+                        st.warning("Esta conciliación ya no está disponible. Actualiza el historial.")
+                        st.stop()
                     st.success("✅ ¡Cambios guardados exitosamente en el consolidado histórico!")
                     st.rerun()
 
